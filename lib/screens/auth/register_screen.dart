@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import '../../services/auth_service.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Leavexa – Register Screen
@@ -86,8 +89,19 @@ class _RegisterScreenState extends State<RegisterScreen>
     super.dispose();
   }
 
-  void _onRegister() {
+  Future<void> _onRegister() async {
     if (!_formKey.currentState!.validate()) return;
+
+    if (_selectedDept == null || _selectedDesignation == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select your department and designation'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
+      );
+      return;
+    }
+
     if (!_agreeTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -97,10 +111,74 @@ class _RegisterScreenState extends State<RegisterScreen>
       );
       return;
     }
+
     setState(() => _isLoading = true);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _isLoading = false);
-    });
+
+    try {
+      await AuthService().registerFaculty(
+        fullName: _nameCtrl.text,
+        employeeId: _empIdCtrl.text,
+        email: _emailCtrl.text,
+        phone: _phoneCtrl.text,
+        departmentName: _selectedDept!,
+        designation: _selectedDesignation!,
+        password: _passCtrl.text,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Registration successful! Your account is pending admin approval.',
+          ),
+          backgroundColor: Color(0xFF1B4332),
+        ),
+      );
+
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) Navigator.pop(context);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+
+      String message;
+      switch (e.code) {
+        case 'email-already-in-use':
+          message = 'This email is already registered.';
+          break;
+        case 'invalid-email':
+          message = 'Please enter a valid email address.';
+          break;
+        case 'weak-password':
+          message = 'Password must be at least 6 characters.';
+          break;
+        case 'network-request-failed':
+          message = 'Network error. Please check your internet connection.';
+          break;
+        default:
+          message = e.message ?? 'Registration failed. Please try again.';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Registration failed: $e'),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override
@@ -220,182 +298,182 @@ class _RegisterScreenState extends State<RegisterScreen>
                           _DropdownField(
                             hint: 'Department',
                             prefixIcon: Icons.account_balance_outlined,
-                                  value: _selectedDept,
-                                  items: _departments,
-                                  onChanged: (val) =>
-                                      setState(() => _selectedDept = val),
-                                ),
+                            value: _selectedDept,
+                            items: _departments,
+                            onChanged: (val) =>
+                                setState(() => _selectedDept = val),
+                          ),
 
-                                const SizedBox(height: 8),
+                          const SizedBox(height: 8),
 
-                                // ── DESIGNATION DROPDOWN ────────────────────
-                                _DropdownField(
-                                  hint: 'Designation',
-                                  prefixIcon: Icons.work_outline_rounded,
-                                  value: _selectedDesignation,
-                                  items: _designations,
-                                  onChanged: (val) =>
-                                      setState(() => _selectedDesignation = val),
-                                ),
+                          // ── DESIGNATION DROPDOWN ────────────────────
+                          _DropdownField(
+                            hint: 'Designation',
+                            prefixIcon: Icons.work_outline_rounded,
+                            value: _selectedDesignation,
+                            items: _designations,
+                            onChanged: (val) =>
+                                setState(() => _selectedDesignation = val),
+                          ),
 
-                                const SizedBox(height: 8),
+                          const SizedBox(height: 8),
 
-                                // ── PASSWORD ────────────────────────────────
-                                _InputField(
-                                  controller: _passCtrl,
-                                  hint: 'Password',
-                                  prefixIcon: Icons.lock_outline_rounded,
-                                  obscureText: _obscurePass,
-                                  suffixIcon: GestureDetector(
-                                    onTap: () => setState(
-                                        () => _obscurePass = !_obscurePass),
-                                    child: Icon(
-                                      _obscurePass
-                                          ? Icons.visibility_off_outlined
-                                          : Icons.visibility_outlined,
-                                      size: 20,
-                                      color: const Color(0xFF94A3B8),
-                                    ),
+                          // ── PASSWORD ────────────────────────────────
+                          _InputField(
+                            controller: _passCtrl,
+                            hint: 'Password',
+                            prefixIcon: Icons.lock_outline_rounded,
+                            obscureText: _obscurePass,
+                            suffixIcon: GestureDetector(
+                              onTap: () => setState(
+                                      () => _obscurePass = !_obscurePass),
+                              child: Icon(
+                                _obscurePass
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                                size: 20,
+                                color: const Color(0xFF94A3B8),
+                              ),
+                            ),
+                            validator: (v) => v == null || v.isEmpty
+                                ? 'Please enter a password'
+                                : null,
+                          ),
+
+                          const SizedBox(height: 8),
+
+                          // ── CONFIRM PASSWORD ────────────────────────
+                          _InputField(
+                            controller: _confirmPassCtrl,
+                            hint: 'Confirm Password',
+                            prefixIcon: Icons.lock_outline_rounded,
+                            obscureText: _obscureConfirmPass,
+                            suffixIcon: GestureDetector(
+                              onTap: () => setState(() =>
+                              _obscureConfirmPass =
+                              !_obscureConfirmPass),
+                              child: Icon(
+                                _obscureConfirmPass
+                                    ? Icons.visibility_off_outlined
+                                    : Icons.visibility_outlined,
+                                size: 20,
+                                color: const Color(0xFF94A3B8),
+                              ),
+                            ),
+                            validator: (v) {
+                              if (v == null || v.isEmpty) {
+                                return 'Please confirm your password';
+                              }
+                              if (v != _passCtrl.text) {
+                                return 'Passwords do not match';
+                              }
+                              return null;
+                            },
+                          ),
+
+                          const SizedBox(height: 12),
+
+                          // ── TERMS & PRIVACY POLICY CHECKBOX ─────────
+                          Row(
+                            children: [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: Checkbox(
+                                  value: _agreeTerms,
+                                  onChanged: (v) => setState(
+                                          () => _agreeTerms = v ?? false),
+                                  activeColor: const Color(0xFF1B4332),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius:
+                                    BorderRadius.circular(4),
                                   ),
-                                  validator: (v) => v == null || v.isEmpty
-                                      ? 'Please enter a password'
-                                      : null,
-                                ),
-
-                                const SizedBox(height: 8),
-
-                                // ── CONFIRM PASSWORD ────────────────────────
-                                _InputField(
-                                  controller: _confirmPassCtrl,
-                                  hint: 'Confirm Password',
-                                  prefixIcon: Icons.lock_outline_rounded,
-                                  obscureText: _obscureConfirmPass,
-                                  suffixIcon: GestureDetector(
-                                    onTap: () => setState(() =>
-                                        _obscureConfirmPass =
-                                            !_obscureConfirmPass),
-                                    child: Icon(
-                                      _obscureConfirmPass
-                                          ? Icons.visibility_off_outlined
-                                          : Icons.visibility_outlined,
-                                      size: 20,
-                                      color: const Color(0xFF94A3B8),
-                                    ),
+                                  side: const BorderSide(
+                                    color: Color(0xFF94A3B8),
+                                    width: 1.5,
                                   ),
-                                  validator: (v) {
-                                    if (v == null || v.isEmpty) {
-                                      return 'Please confirm your password';
-                                    }
-                                    if (v != _passCtrl.text) {
-                                      return 'Passwords do not match';
-                                    }
-                                    return null;
-                                  },
+                                  materialTapTargetSize:
+                                  MaterialTapTargetSize.shrinkWrap,
                                 ),
-
-                                const SizedBox(height: 12),
-
-                                // ── TERMS & PRIVACY POLICY CHECKBOX ─────────
-                                Row(
-                                  children: [
-                                    SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: Checkbox(
-                                        value: _agreeTerms,
-                                        onChanged: (v) => setState(
-                                            () => _agreeTerms = v ?? false),
-                                        activeColor: const Color(0xFF1B4332),
-                                        shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                        ),
-                                        side: const BorderSide(
-                                          color: Color(0xFF94A3B8),
-                                          width: 1.5,
-                                        ),
-                                        materialTapTargetSize:
-                                            MaterialTapTargetSize.shrinkWrap,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 10),
-                                    Expanded(
-                                      child: GestureDetector(
-                                        onTap: () => setState(
-                                            () => _agreeTerms = !_agreeTerms),
-                                        child: RichText(
-                                          text: const TextSpan(
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              color: Color(0xFF64748B),
-                                            ),
-                                            children: [
-                                              TextSpan(
-                                                  text: 'I agree to the '),
-                                              TextSpan(
-                                                text: 'Terms & Privacy Policy',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w700,
-                                                  color: Color(0xFF1B4332),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-
-                                const SizedBox(height: 38),
-
-                                // ── CREATE ACCOUNT BUTTON ───────────────────
-                                _RegisterButton(
-                                  isLoading: _isLoading,
-                                  onTap: _onRegister,
-                                ),
-
-                                const SizedBox(height: 26),
-
-                                // ── LOGIN LINK ──────────────────────────────
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Text(
-                                      'Already have an account? ',
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(
+                                          () => _agreeTerms = !_agreeTerms),
+                                  child: RichText(
+                                    text: const TextSpan(
                                       style: TextStyle(
-                                        fontSize: 13.5,
+                                        fontSize: 13,
                                         color: Color(0xFF64748B),
                                       ),
-                                    ),
-                                    GestureDetector(
-                                      onTap: () => Navigator.pop(context),
-                                      child: const Text(
-                                        'Login',
-                                        style: TextStyle(
-                                          fontSize: 13.5,
-                                          fontWeight: FontWeight.w700,
-                                          color: Color(0xFF1B4332),
+                                      children: [
+                                        TextSpan(
+                                            text: 'I agree to the '),
+                                        TextSpan(
+                                          text: 'Terms & Privacy Policy',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF1B4332),
+                                          ),
                                         ),
-                                      ),
+                                      ],
                                     ),
-                                  ],
+                                  ),
                                 ),
-
-                                const SizedBox(height: 16),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ),
+
+                          const SizedBox(height: 38),
+
+                          // ── CREATE ACCOUNT BUTTON ───────────────────
+                          _RegisterButton(
+                            isLoading: _isLoading,
+                            onTap: _onRegister,
+                          ),
+
+                          const SizedBox(height: 26),
+
+                          // ── LOGIN LINK ──────────────────────────────
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Text(
+                                'Already have an account? ',
+                                style: TextStyle(
+                                  fontSize: 13.5,
+                                  color: Color(0xFF64748B),
+                                ),
+                              ),
+                              GestureDetector(
+                                onTap: () => Navigator.pop(context),
+                                child: const Text(
+                                  'Login',
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1B4332),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          const SizedBox(height: 16),
+                        ],
                       ),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
-          );
-        }
-      }
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Reusable Input Field
@@ -445,12 +523,12 @@ class _InputField extends StatelessWidget {
         prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         suffixIcon: suffixIcon != null
             ? Padding(
-                padding: const EdgeInsets.only(right: 14),
-                child: suffixIcon,
-              )
+          padding: const EdgeInsets.only(right: 14),
+          child: suffixIcon,
+        )
             : null,
         suffixIconConstraints:
-            const BoxConstraints(minWidth: 0, minHeight: 0),
+        const BoxConstraints(minWidth: 0, minHeight: 0),
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
         contentPadding: const EdgeInsets.symmetric(
@@ -549,9 +627,9 @@ class _DropdownField extends StatelessWidget {
       ),
       items: items
           .map((item) => DropdownMenuItem<String>(
-                value: item,
-                child: Text(item),
-              ))
+        value: item,
+        child: Text(item),
+      ))
           .toList(),
     );
   }
@@ -606,33 +684,33 @@ class _RegisterButtonState extends State<_RegisterButton>
           child: Center(
             child: widget.isLoading
                 ? const SizedBox(
-                    width: 22,
-                    height: 22,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2.5,
-                    ),
-                  )
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.5,
+              ),
+            )
                 : const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        'Create Account',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.white,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                      SizedBox(width: 8),
-                      Icon(
-                        Icons.arrow_forward_rounded,
-                        color: Colors.white,
-                        size: 18,
-                      ),
-                    ],
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Create Account',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    letterSpacing: 0.3,
                   ),
+                ),
+                SizedBox(width: 8),
+                Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -14,8 +14,17 @@ class AppThemeState {
 
   bool get isDarkMode => themeModeNotifier.value == ThemeMode.dark;
 
-  void toggleTheme(bool isDark) {
-    themeModeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+  void toggleTheme([bool? isDark]) {
+    if (isDark != null) {
+      themeModeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
+    } else {
+      themeModeNotifier.value =
+          themeModeNotifier.value == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+    }
+  }
+
+  void resetToLightMode() {
+    themeModeNotifier.value = ThemeMode.light;
   }
 }
 

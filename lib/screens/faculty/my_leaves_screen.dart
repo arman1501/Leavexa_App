@@ -87,11 +87,14 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
       case 0:
         Navigator.pushReplacementNamed(context, AppRoutes.facultyDashboard);
         break;
+      case 1:
+        // Already on My Leaves
+        break;
       case 2:
-        Navigator.pushNamed(context, AppRoutes.notifications);
+        Navigator.pushReplacementNamed(context, AppRoutes.notifications);
         break;
       case 3:
-        Navigator.pushNamed(context, AppRoutes.profile);
+        Navigator.pushReplacementNamed(context, AppRoutes.profile);
         break;
     }
   }

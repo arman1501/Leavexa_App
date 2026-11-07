@@ -11,14 +11,14 @@ class FacultyProfileData {
   final String appointmentDate;
 
   FacultyProfileData({
-    this.fullName = 'Md. Arman Hussan',
-    this.email = 'rahman@cse.univ.edu',
+    this.fullName = 'Md. Arman',
+    this.email = 'arman@leavexa.edu',
     this.phone = '+880 1712-345678',
-    this.office = 'Room 408, Academic Bldg 2',
+    this.office = 'Room 304, Academic Bldg 2',
     this.employeeId = 'FAC-1024',
     this.department = 'Computer Science & Engineering',
-    this.designation = 'Associate Professor (Tenured)',
-    this.appointmentDate = 'August 2018 (6 Years Tenure)',
+    this.designation = 'Lecturer',
+    this.appointmentDate = 'August 2022',
   });
 
   FacultyProfileData copyWith({

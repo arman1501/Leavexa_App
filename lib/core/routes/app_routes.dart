@@ -22,11 +22,17 @@ class AppRoutes {
 
   // ── Department Head ────────────────────────────────────────────────────────
   static const String headDashboard    = '/head/dashboard';
+  static const String headProfile      = '/head/profile';
+  static const String headRequests     = '/head/requests';
+  static const String headRequestDetails = '/head/request-details';
+  static const String headReviewRequest  = '/head/review-request';
   static const String leaveRequestDetails = '/head/leave-request-details';
   static const String deptCalendar     = '/head/dept-calendar';
 
-  // ── Registrar ──────────────────────────────────────────────────────────────
+  // ── Registrar / Admin ──────────────────────────────────────────────────────
   static const String registrarDashboard = '/registrar/dashboard';
+  static const String adminDashboard     = '/admin/dashboard';
+  static const String adminProfile       = '/admin/profile';
   static const String allLeaveRequests   = '/registrar/all-requests';
   static const String finalApproval      = '/registrar/final-approval';
 }

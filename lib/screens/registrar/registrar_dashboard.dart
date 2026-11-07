@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-class PLACEHOLDER extends StatelessWidget {
-  const PLACEHOLDER({super.key});
+import '../admin/admin_dashboard.dart';
+
+class RegistrarDashboard extends StatelessWidget {
+  const RegistrarDashboard({super.key});
+
   @override
-  Widget build(BuildContext context) =>
-      const Scaffold(body: Center(child: Text('Coming Soon')));
+  Widget build(BuildContext context) => const AdminDashboard();
 }

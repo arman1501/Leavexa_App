@@ -11,9 +11,19 @@ import 'screens/auth/register_screen.dart';
 import 'screens/faculty/faculty_dashboard.dart';
 import 'screens/faculty/my_leaves_screen.dart';
 import 'screens/faculty/apply_leave_screen.dart';
+import 'screens/faculty/notifications_screen.dart';
 import 'screens/faculty/profile_screen.dart';
 import 'screens/faculty/edit_profile_screen.dart';
 import 'screens/faculty/settings_screen.dart';
+import 'screens/head/head_dashboard.dart';
+import 'screens/head/head_profile_screen.dart';
+import 'screens/head/head_leave_request_screen.dart';
+import 'screens/head/dept_calendar_screen.dart';
+import 'screens/head/head_requests_screen.dart';
+import 'screens/head/head_request_details_screen.dart';
+import 'screens/head/head_review_request_screen.dart';
+import 'screens/admin/admin_dashboard.dart';
+import 'screens/admin/admin_profile_screen.dart';
 
 class LeavexaApp extends StatelessWidget {
   const LeavexaApp({super.key});
@@ -37,9 +47,20 @@ class LeavexaApp extends StatelessWidget {
             AppRoutes.facultyDashboard: (_) => const FacultyDashboard(),
             AppRoutes.myLeaves:         (_) => const MyLeavesScreen(),
             AppRoutes.applyLeave:        (_) => const ApplyLeaveScreen(),
+            AppRoutes.notifications:    (_) => const NotificationsScreen(),
             AppRoutes.profile:          (_) => const ProfileScreen(),
             AppRoutes.editProfile:      (_) => const EditProfileScreen(),
             AppRoutes.settings:         (_) => const SettingsScreen(),
+            AppRoutes.headDashboard:    (_) => const HeadDashboard(),
+            AppRoutes.headProfile:      (_) => const HeadProfileScreen(),
+            AppRoutes.headRequests:     (_) => const HeadRequestsScreen(),
+            AppRoutes.headRequestDetails: (_) => const HeadRequestDetailsScreen(),
+            AppRoutes.headReviewRequest:  (_) => const HeadReviewRequestScreen(),
+            AppRoutes.leaveRequestDetails: (_) => const HeadLeaveRequestScreen(),
+            AppRoutes.deptCalendar:     (_) => const DeptCalendarScreen(),
+            AppRoutes.adminDashboard:   (_) => const AdminDashboard(),
+            AppRoutes.adminProfile:     (_) => const AdminProfileScreen(),
+            AppRoutes.registrarDashboard: (_) => const AdminDashboard(),
           },
         );
       },

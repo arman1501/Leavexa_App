@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/routes/app_routes.dart';
+import '../../core/theme/app_theme.dart';
 import 'register_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +58,15 @@ class _LoginScreenState extends State<LoginScreen>
     Future.delayed(const Duration(seconds: 1), () {
       if (mounted) {
         setState(() => _isLoading = false);
-        Navigator.pushReplacementNamed(context, AppRoutes.facultyDashboard);
+        AppThemeState.instance.resetToLightMode();
+        final email = _emailCtrl.text.trim().toLowerCase();
+        if (email.contains('admin') || email.contains('registrar')) {
+          Navigator.pushReplacementNamed(context, AppRoutes.adminDashboard);
+        } else if (email.contains('head')) {
+          Navigator.pushReplacementNamed(context, AppRoutes.headDashboard);
+        } else {
+          Navigator.pushReplacementNamed(context, AppRoutes.facultyDashboard);
+        }
       }
     });
   }

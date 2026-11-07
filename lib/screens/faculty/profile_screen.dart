@@ -31,7 +31,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         Navigator.pushReplacementNamed(context, AppRoutes.myLeaves);
         break;
       case 2:
-        Navigator.pushNamed(context, AppRoutes.notifications);
+        Navigator.pushReplacementNamed(context, AppRoutes.notifications);
+        break;
+      case 3:
         break;
     }
   }
@@ -522,7 +524,7 @@ class _InfoTile extends StatelessWidget {
               ],
             ),
           ),
-          ?trailing,
+          if (trailing != null) trailing!,
         ],
       ),
     );

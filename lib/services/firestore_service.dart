@@ -1,64 +1,71 @@
-// ─────────────────────────────────────────────────────────────────────────────
-//  firestore_service.dart  –  Firestore CRUD base helper
-// ─────────────────────────────────────────────────────────────────────────────
 
-// TODO: Add `cloud_firestore` to pubspec.yaml before uncommenting.
-//
-// import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class FirestoreService {
-  // final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final FirebaseFirestore _db;
 
-  /// Add a document to [collection]. Returns the generated document ID.
+  FirestoreService({FirebaseFirestore? firestore})
+      : _db = firestore ?? FirebaseFirestore.instance;
+
+  // Add a document with an auto-generated ID.
   Future<String> addDocument(
-    String collection,
-    Map<String, dynamic> data,
-  ) async {
-    // final ref = await _db.collection(collection).add(data);
-    // return ref.id;
-    throw UnimplementedError('FirestoreService.addDocument not yet implemented.');
+      String collection,
+      Map<String, dynamic> data,
+      ) async {
+    final ref = await _db.collection(collection).add(data);
+    return ref.id;
   }
 
-  /// Set (overwrite) a document with a known [docId].
+  // Create or overwrite a document.
   Future<void> setDocument(
-    String collection,
-    String docId,
-    Map<String, dynamic> data,
-  ) async {
-    // await _db.collection(collection).doc(docId).set(data);
-    throw UnimplementedError('FirestoreService.setDocument not yet implemented.');
+      String collection,
+      String docId,
+      Map<String, dynamic> data,
+      ) async {
+    await _db.collection(collection).doc(docId).set(data);
   }
 
-  /// Update specific fields of a document.
+  // Update existing document fields.
   Future<void> updateDocument(
-    String collection,
-    String docId,
-    Map<String, dynamic> data,
-  ) async {
-    // await _db.collection(collection).doc(docId).update(data);
-    throw UnimplementedError('FirestoreService.updateDocument not yet implemented.');
+      String collection,
+      String docId,
+      Map<String, dynamic> data,
+      ) async {
+    await _db.collection(collection).doc(docId).update(data);
   }
 
-  /// Delete a document.
-  Future<void> deleteDocument(String collection, String docId) async {
-    // await _db.collection(collection).doc(docId).delete();
-    throw UnimplementedError('FirestoreService.deleteDocument not yet implemented.');
+  // Delete a document.
+  Future<void> deleteDocument(
+      String collection,
+      String docId,
+      ) async {
+    await _db.collection(collection).doc(docId).delete();
   }
 
-  /// Fetch a single document by ID.
+  // Fetch a single document.
   Future<Map<String, dynamic>?> getDocument(
-    String collection,
-    String docId,
-  ) async {
-    // final snap = await _db.collection(collection).doc(docId).get();
-    // return snap.exists ? snap.data() : null;
-    throw UnimplementedError('FirestoreService.getDocument not yet implemented.');
+      String collection,
+      String docId,
+      ) async {
+    final snapshot =
+    await _db.collection(collection).doc(docId).get();
+
+    if (!snapshot.exists) return null;
+
+    return snapshot.data();
   }
 
-  /// Fetch all documents in a collection.
-  Future<List<Map<String, dynamic>>> getCollection(String collection) async {
-    // final snap = await _db.collection(collection).get();
-    // return snap.docs.map((d) => {'id': d.id, ...d.data()}).toList();
-    throw UnimplementedError('FirestoreService.getCollection not yet implemented.');
+  // Fetch all documents in a collection.
+  Future<List<Map<String, dynamic>>> getCollection(
+      String collection,
+      ) async {
+    final snapshot = await _db.collection(collection).get();
+
+    return snapshot.docs.map((doc) {
+      return {
+        'id': doc.id,
+        ...doc.data(),
+      };
+    }).toList();
   }
 }

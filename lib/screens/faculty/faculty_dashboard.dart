@@ -8,6 +8,7 @@ import '../../core/constants/app_colors.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/faculty_profile_state.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class FacultyDashboard extends StatefulWidget {
@@ -24,14 +25,17 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
     if (index == _currentNavIndex) return;
     setState(() => _currentNavIndex = index);
     switch (index) {
+      case 0:
+        // Already on Dashboard
+        break;
       case 1:
-        Navigator.pushNamed(context, AppRoutes.myLeaves);
+        Navigator.pushReplacementNamed(context, AppRoutes.myLeaves);
         break;
       case 2:
-        Navigator.pushNamed(context, AppRoutes.notifications);
+        Navigator.pushReplacementNamed(context, AppRoutes.notifications);
         break;
       case 3:
-        Navigator.pushNamed(context, AppRoutes.profile);
+        Navigator.pushReplacementNamed(context, AppRoutes.profile);
         break;
     }
   }
@@ -69,43 +73,54 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                     // ── 1. HEADER (PROFILE + NOTIFICATIONS) ──────────────────────
                     Row(
                       children: [
-                        // Profile Avatar
-                        Container(
-                          width: 44,
-                          height: 44,
-                          decoration: const BoxDecoration(
-                            shape: BoxShape.circle,
-                            image: DecorationImage(
-                              image: AssetImage('assets/images/profile.jpg'),
-                              fit: BoxFit.cover,
+                        // Profile Avatar (Tappable -> Faculty Profile)
+                        GestureDetector(
+                          onTap: () => Navigator.pushReplacementNamed(
+                            context,
+                            AppRoutes.profile,
+                          ),
+                          child: Container(
+                            width: 44,
+                            height: 44,
+                            decoration: const BoxDecoration(
+                              shape: BoxShape.circle,
+                              image: DecorationImage(
+                                image: AssetImage('assets/images/profile.jpg'),
+                                fit: BoxFit.cover,
+                              ),
                             ),
                           ),
                         ),
                         const SizedBox(width: 12),
-                        // Name & Designation
+                        // Name & Designation (Synced with Faculty Profile State)
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                '${AppHelpers.getGreetingPrefix()}, Md. Arman',
-                                style: TextStyle(
-                                  fontSize: 15.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: textPrimary,
-                                  letterSpacing: -0.2,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Assistant Professor • CSE',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w500,
-                                  color: textSecondary,
-                                ),
-                              ),
-                            ],
+                          child: ValueListenableBuilder<FacultyProfileData>(
+                            valueListenable: FacultyProfileState.instance.notifier,
+                            builder: (context, profileData, _) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '${AppHelpers.getGreetingPrefix()}, ${profileData.fullName}',
+                                    style: TextStyle(
+                                      fontSize: 15.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                      letterSpacing: -0.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '${profileData.designation} • CSE',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
                           ),
                         ),
                         // Notification Button

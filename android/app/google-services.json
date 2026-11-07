@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "73712036420",
+    "project_id": "leavexa",
+    "storage_bucket": "leavexa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:73712036420:android:2db6ce88ec2f0d418cea11",
+        "android_client_info": {
+          "package_name": "com.leavexa.leavexa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyARUe5J3W9oG6k9isH-maxQXER88PDCm3o"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

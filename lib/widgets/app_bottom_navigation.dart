@@ -22,21 +22,52 @@ class AppBottomNavigation extends StatelessWidget {
       case 'department_head':
         return const [
           BottomNavigationBarItem(
-            icon: Icon(Icons.dashboard_outlined),
-            activeIcon: Icon(Icons.dashboard_rounded),
-            label: 'Dashboard',
+            icon: Icon(Icons.home_outlined),
+            activeIcon: Icon(Icons.home_rounded),
+            label: 'Home',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.inbox_outlined),
-            activeIcon: Icon(Icons.inbox_rounded),
+            icon: Icon(Icons.assignment_outlined),
+            activeIcon: Icon(Icons.assignment_rounded),
             label: 'Requests',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.calendar_month_outlined),
-            activeIcon: Icon(Icons.calendar_month_rounded),
+            icon: Icon(Icons.calendar_today_outlined),
+            activeIcon: Icon(Icons.calendar_today_rounded),
             label: 'Calendar',
           ),
           BottomNavigationBarItem(
+            icon: Icon(Icons.person_outline_rounded),
+            activeIcon: Icon(Icons.person_rounded),
+            label: 'Profile',
+          ),
+        ];
+      case 'admin':
+        return [
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.grid_view_rounded),
+            activeIcon: Icon(Icons.grid_view_rounded),
+            label: 'Home',
+          ),
+          const BottomNavigationBarItem(
+            icon: Badge(
+              label: Text('12', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+              backgroundColor: Color(0xFFDC2626),
+              child: Icon(Icons.assignment_outlined),
+            ),
+            activeIcon: Badge(
+              label: Text('12', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+              backgroundColor: Color(0xFFDC2626),
+              child: Icon(Icons.assignment_rounded),
+            ),
+            label: 'Approvals',
+          ),
+          const BottomNavigationBarItem(
+            icon: Icon(Icons.people_outline_rounded),
+            activeIcon: Icon(Icons.people_rounded),
+            label: 'Faculty',
+          ),
+          const BottomNavigationBarItem(
             icon: Icon(Icons.person_outline_rounded),
             activeIcon: Icon(Icons.person_rounded),
             label: 'Profile',
