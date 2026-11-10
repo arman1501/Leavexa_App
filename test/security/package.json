@@ -1,0 +1,17 @@
+{
+  "name": "security",
+  "version": "1.0.0",
+  "description": "",
+  "main": "rules_evaluation_test.js",
+  "scripts": {
+    "test": "mocha firestore_rules_emulator_test.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^6.0.0",
+    "mocha": "^12.0.3"
+  }
+}

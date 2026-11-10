@@ -7,18 +7,102 @@ import 'package:flutter/services.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/notification_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../services/notification_service.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class NotificationsScreen extends StatefulWidget {
-  const NotificationsScreen({super.key});
+  final NotificationService? notificationService;
+  final AuthRepository? authRepository;
+
+  const NotificationsScreen({
+    super.key,
+    this.notificationService,
+    this.authRepository,
+  });
 
   @override
   State<NotificationsScreen> createState() => _NotificationsScreenState();
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  final int _currentNavIndex = 2; // 2: Notifications active
+  late final NotificationService _notifService =
+      widget.notificationService ?? NotificationService();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
+  int _currentNavIndex = 2; // 2: Notifications active
   String _selectedFilter = 'All';
+  bool _hasFetchedReal = false;
+  List<Map<String, dynamic>> _realNotifications = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRealNotifications();
+  }
+
+  Future<void> _fetchRealNotifications() async {
+    final uid = _authRepo.currentUserId ?? AuthRepository.activeUser?.uid;
+    if (uid == null) return;
+    try {
+      final notifs = await _notifService.getForUser(uid);
+      if (mounted) {
+        setState(() {
+          _realNotifications = notifs.map(_mapNotificationToItem).toList();
+          _hasFetchedReal = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _mapNotificationToItem(NotificationModel n) {
+    IconData icon;
+    Color iconColor;
+    switch (n.type.toLowerCase()) {
+      case 'rejection':
+      case 'rejected':
+        icon = Icons.cancel_outlined;
+        iconColor = const Color(0xFFDC2626);
+        break;
+      case 'approval':
+      case 'approved':
+      case 'submission':
+        icon = Icons.check_circle_outline_rounded;
+        iconColor = const Color(0xFF16A34A);
+        break;
+      case 'coverage':
+        icon = Icons.groups_outlined;
+        iconColor = const Color(0xFF2563EB);
+        break;
+      default:
+        icon = Icons.notifications_none_rounded;
+        iconColor = const Color(0xFFD97706);
+    }
+
+    final diff = DateTime.now().difference(n.createdAt);
+    String timeStr;
+    if (diff.inMinutes < 60) {
+      timeStr = '${diff.inMinutes}m ago';
+    } else if (diff.inHours < 24) {
+      timeStr = '${diff.inHours}h ago';
+    } else {
+      timeStr = '${diff.inDays}d ago';
+    }
+
+    return {
+      'id': n.id,
+      'title': n.title,
+      'body': n.body,
+      'time': timeStr,
+      'type': n.type,
+      'icon': icon,
+      'iconColor': iconColor,
+      'isUnread': !n.isRead,
+      'model': n,
+    };
+  }
 
   final List<Map<String, dynamic>> _notifications = [
     {
@@ -63,8 +147,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     },
   ];
 
+  List<Map<String, dynamic>> get _currentNotifications =>
+      _hasFetchedReal ? _realNotifications : _notifications;
+
   void _onBottomNavTap(int index) {
     if (index == _currentNavIndex) return;
+    setState(() => _currentNavIndex = index);
     switch (index) {
       case 0:
         Navigator.pushReplacementNamed(context, AppRoutes.facultyDashboard);
@@ -82,11 +170,23 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
 
   void _markAllAsRead() {
     setState(() {
-      for (var n in _notifications) {
+      for (var n in _currentNotifications) {
         n['isUnread'] = false;
+        if (n.containsKey('id')) {
+          _notifService.markRead(n['id'] as String);
+        }
       }
     });
     AppHelpers.showSuccess(context, 'All notifications marked as read');
+  }
+
+  void _markSingleAsRead(Map<String, dynamic> item) {
+    if (item['isUnread'] == true) {
+      setState(() => item['isUnread'] = false);
+      if (item.containsKey('id')) {
+        _notifService.markRead(item['id'] as String);
+      }
+    }
   }
 
   @override
@@ -95,27 +195,37 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
 
-        final filtered = _notifications.where((n) {
+        final filtered = _currentNotifications.where((n) {
           if (_selectedFilter == 'Unread') return n['isUnread'] == true;
-          if (_selectedFilter == 'Leaves') return n['type'] == 'leave';
+          if (_selectedFilter == 'Leaves') {
+            return n['type'] == 'leave' ||
+                n['type'] == 'submission' ||
+                n['type'] == 'status_update' ||
+                n['type'] == 'rejection';
+          }
           return true;
         }).toList();
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -174,11 +284,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                               decoration: BoxDecoration(
                                 color: isSelected
                                     ? (isDark
-                                        ? const Color(0xFF047857)
-                                        : const Color(0xFF1B4332))
+                                          ? const Color(0xFF047857)
+                                          : const Color(0xFF1B4332))
                                     : (isDark
-                                        ? const Color(0xFF1E293B)
-                                        : Colors.white),
+                                          ? const Color(0xFF1E293B)
+                                          : Colors.white),
                                 borderRadius: BorderRadius.circular(20),
                                 border: Border.all(
                                   color: isSelected
@@ -216,14 +326,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                         final item = filtered[index];
                         final isUnread = item['isUnread'] == true;
 
-                        return Container(
+                        return GestureDetector(
+                          onTap: () => _markSingleAsRead(item),
+                          child: Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
                             color: cardBg,
                             borderRadius: BorderRadius.circular(14),
                             border: Border.all(
                               color: isUnread
-                                  ? const Color(0xFF16A34A).withValues(alpha: 0.5)
+                                  ? const Color(
+                                      0xFF16A34A,
+                                    ).withValues(alpha: 0.5)
                                   : borderColor,
                               width: isUnread ? 1.5 : 1,
                             ),
@@ -307,6 +421,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                 ),
                               ),
                             ],
+                          ),
                           ),
                         );
                       },

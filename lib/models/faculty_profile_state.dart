@@ -9,6 +9,7 @@ class FacultyProfileData {
   final String department;
   final String designation;
   final String appointmentDate;
+  final String? photoUrl;
 
   FacultyProfileData({
     this.fullName = 'Md. Arman',
@@ -19,6 +20,7 @@ class FacultyProfileData {
     this.department = 'Computer Science & Engineering',
     this.designation = 'Lecturer',
     this.appointmentDate = 'August 2022',
+    this.photoUrl,
   });
 
   FacultyProfileData copyWith({
@@ -30,6 +32,8 @@ class FacultyProfileData {
     String? department,
     String? designation,
     String? appointmentDate,
+    String? photoUrl,
+    bool removePhoto = false,
   }) {
     return FacultyProfileData(
       fullName: fullName ?? this.fullName,
@@ -40,6 +44,7 @@ class FacultyProfileData {
       department: department ?? this.department,
       designation: designation ?? this.designation,
       appointmentDate: appointmentDate ?? this.appointmentDate,
+      photoUrl: removePhoto ? null : (photoUrl ?? this.photoUrl),
     );
   }
 }
@@ -56,12 +61,20 @@ class FacultyProfileState {
     String? email,
     String? phone,
     String? office,
+    String? photoUrl,
+    bool removePhoto = false,
   }) {
     notifier.value = notifier.value.copyWith(
       fullName: fullName,
       email: email,
       phone: phone,
       office: office,
+      photoUrl: photoUrl,
+      removePhoto: removePhoto,
     );
+  }
+
+  void reset() {
+    notifier.value = FacultyProfileData();
   }
 }

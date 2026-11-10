@@ -1,4 +1,3 @@
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class UserModel {
@@ -41,7 +40,8 @@ class UserModel {
     if (timestamp is Timestamp) {
       parsedDate = timestamp.toDate();
     } else if (timestamp is String) {
-      parsedDate = DateTime.tryParse(timestamp) ??
+      parsedDate =
+          DateTime.tryParse(timestamp) ??
           DateTime.fromMillisecondsSinceEpoch(0);
     } else {
       parsedDate = DateTime.fromMillisecondsSinceEpoch(0);
@@ -51,7 +51,7 @@ class UserModel {
       uid: map['uid'] as String? ?? '',
       fullName: map['fullName'] as String? ?? '',
       email: map['email'] as String? ?? '',
-      employeeId: map['employeeId'] as String? ?? '',
+      employeeId: (map['employeeId'] as String? ?? '').trim().toUpperCase(),
       departmentId: map['departmentId'] as String? ?? '',
       departmentName: map['departmentName'] as String? ?? '',
       designation: map['designation'] as String? ?? '',
@@ -59,8 +59,7 @@ class UserModel {
       phone: map['phone'] as String?,
       photoUrl: map['photoUrl'] as String?,
       isActive: map['isActive'] as bool? ?? false,
-      approvalStatus:
-      map['approvalStatus'] as String? ?? 'pending',
+      approvalStatus: map['approvalStatus'] as String? ?? 'pending',
       createdAt: parsedDate,
     );
   }
@@ -71,7 +70,7 @@ class UserModel {
       'uid': uid,
       'fullName': fullName,
       'email': email,
-      'employeeId': employeeId,
+      'employeeId': employeeId.trim().toUpperCase(),
       'departmentId': departmentId,
       'departmentName': departmentName,
       'designation': designation,
@@ -84,9 +83,25 @@ class UserModel {
     };
   }
 
+  // ── Role helpers ──────────────────────────────────────────────────────────
+  bool get isFaculty => role == 'faculty';
+  bool get isDeptHead => role == 'department_head';
+  bool get isRegistrar => role == 'registrar';
+  bool get isAdmin => role == 'admin';
+
+  // ── Approval / status helpers ───────────────────────────────────────────
+  bool get isApproved => approvalStatus == 'approved';
+  bool get isPending => approvalStatus == 'pending';
+  bool get isRejected => approvalStatus == 'rejected';
+
+  /// True when the account is both active AND approved — the minimum
+  /// requirement for any role to access their dashboard.
+  bool get isActiveAndApproved => isActive && isApproved;
+
   // Update existing user information
   UserModel copyWith({
     String? fullName,
+    String? employeeId,
     String? phone,
     String? photoUrl,
     String? designation,
@@ -97,7 +112,7 @@ class UserModel {
       uid: uid,
       fullName: fullName ?? this.fullName,
       email: email,
-      employeeId: employeeId,
+      employeeId: employeeId?.trim().toUpperCase() ?? this.employeeId,
       departmentId: departmentId,
       departmentName: departmentName,
       designation: designation ?? this.designation,

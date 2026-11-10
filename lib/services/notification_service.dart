@@ -9,7 +9,7 @@ import 'firestore_service.dart';
 class NotificationService {
   final FirestoreService _firestore;
   NotificationService({FirestoreService? firestore})
-      : _firestore = firestore ?? FirestoreService();
+    : _firestore = firestore ?? FirestoreService();
 
   /// Write an in-app notification to Firestore.
   Future<void> send({
@@ -19,7 +19,7 @@ class NotificationService {
     required String type,
     String? relatedApplicationId,
   }) async {
-    final id = DateTime.now().millisecondsSinceEpoch.toString();
+    final id = '${DateTime.now().microsecondsSinceEpoch}_$recipientUid';
     final notification = NotificationModel(
       id: id,
       recipientUid: recipientUid,
@@ -45,15 +45,30 @@ class NotificationService {
     );
   }
 
-  /// Fetch all notifications for a user.
+  /// Fetch all notifications for a user using indexed query.
   Future<List<NotificationModel>> getForUser(String uid) async {
-    final data = await _firestore.getCollection(
+    final data = await _firestore.queryCollection(
       AppConstants.notificationsCollection,
+      isEqualTo: {'recipientUid': uid},
     );
-    return data
-        .map((m) => NotificationModel.fromMap(m))
-        .where((n) => n.recipientUid == uid)
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final notifications =
+        data.map((m) => NotificationModel.fromMap(m)).toList();
+    notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return notifications;
+  }
+
+  /// Real-time stream of notifications for a user.
+  Stream<List<NotificationModel>> streamForUser(String uid) {
+    return _firestore
+        .streamCollection(
+          AppConstants.notificationsCollection,
+          isEqualTo: {'recipientUid': uid},
+        )
+        .map((list) {
+          final notifications =
+              list.map((m) => NotificationModel.fromMap(m)).toList();
+          notifications.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+          return notifications;
+        });
   }
 }

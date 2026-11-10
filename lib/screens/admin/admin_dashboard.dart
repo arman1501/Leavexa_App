@@ -9,27 +9,52 @@ import 'package:flutter/services.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/user_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/user_repository.dart';
+import '../../services/notification_service.dart';
+import '../../services/university_info_service.dart';
+import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class AdminDashboard extends StatefulWidget {
-  const AdminDashboard({super.key});
+  final UserRepository? userRepository;
+  final NotificationService? notificationService;
+  final AuthRepository? authRepository;
+
+  const AdminDashboard({
+    super.key,
+    this.userRepository,
+    this.notificationService,
+    this.authRepository,
+  });
 
   @override
   State<AdminDashboard> createState() => _AdminDashboardState();
 }
 
 class _AdminDashboardState extends State<AdminDashboard> {
+  late final UserRepository _userRepo =
+      widget.userRepository ?? UserRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
   int _currentNavIndex = 0; // 0: Home, 1: Approvals, 2: Faculty, 3: Profile
 
-  int _pendingCount = 12;
-  int _approvedCount = 231;
-  int _rejectedCount = 5;
+  int _pendingCount = 0;
+  int _approvedCount = 0;
+  int _rejectedCount = 0;
 
   bool _sortNewestFirst = true;
   bool _didReadInitialTab = false;
+  String _adminName = 'System Administrator';
+  String? _adminPhotoUrl;
+  List<Map<String, dynamic>> _realTeachers = [];
+  List<Map<String, dynamic>> _allFacultyDirectory = [];
 
   // Approvals Tab state
-  String _approvalStatusFilter = 'ALL'; // 'ALL', 'PENDING', 'APPROVED', 'REJECTED'
+  String _approvalStatusFilter =
+      'ALL'; // 'ALL', 'PENDING', 'APPROVED', 'REJECTED'
   String _approvalSearchQuery = '';
   final TextEditingController _approvalSearchCtrl = TextEditingController();
 
@@ -37,6 +62,154 @@ class _AdminDashboardState extends State<AdminDashboard> {
   String _facultyDeptFilter = 'ALL';
   String _facultySearchQuery = '';
   final TextEditingController _facultySearchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRealFaculty();
+  }
+
+  Future<void> _loadRealFaculty() async {
+    try {
+      try {
+        final currentAdmin = await _authRepo.getCurrentUserProfile();
+        if (currentAdmin != null && mounted) {
+          setState(() {
+            _adminName = currentAdmin.fullName;
+            _adminPhotoUrl = currentAdmin.photoUrl;
+          });
+        }
+      } catch (_) {}
+
+      final pending = await _userRepo.getPendingFaculty();
+      final all = await _userRepo.getAllFaculty();
+      List<OfficialFacultyMember> officialMembers = const [];
+      try {
+        officialMembers =
+            await UniversityInfoService().getOfficialFaculty();
+      } catch (_) {}
+
+      bool isGenuineUser(UserModel u) {
+        if (u.fullName.trim().isEmpty || u.employeeId.trim().isEmpty) {
+          return false;
+        }
+        final name = u.fullName.toLowerCase();
+        final emp = u.employeeId.toLowerCase();
+        final uid = u.uid.toLowerCase();
+        if (emp.contains('nophoto') ||
+            name.contains('valid faculty') ||
+            name.contains('test teacher') ||
+            name.contains('mocha') ||
+            uid.startsWith('no_photo_user') ||
+            uid.startsWith('owner_') ||
+            uid.startsWith('user_a_') ||
+            uid.startsWith('restart_uid_') ||
+            uid.startsWith('valid_reg_')) {
+          return false;
+        }
+        return true;
+      }
+
+      final genuinePending = pending.where(isGenuineUser).toList();
+      final genuineAll = all.where(isGenuineUser).toList();
+
+      if (mounted) {
+        setState(() {
+          _pendingCount = genuinePending.length;
+          _approvedCount = genuineAll.where((u) => u.isApproved).length;
+          _rejectedCount = genuineAll.where((u) => u.isRejected).length;
+
+          // 1. Registered faculty (Leavexa verified)
+          final registeredVerified =
+              genuineAll.where((u) => u.isApproved).map((u) {
+            return {
+              'id': u.uid,
+              'name': u.fullName,
+              'empId': u.employeeId,
+              'department': u.departmentName,
+              'deptCode': u.departmentId.replaceAll('dept_', '').toUpperCase(),
+              'designation': u.designation,
+              'email': u.email,
+              'phone': u.phone ?? 'N/A',
+              'joined': 'Leavexa Registered Member',
+              'degrees': [u.designation],
+              'institution': 'Leading University Academic Faculty',
+              'credentials': 'Faculty ID Verified',
+              'nidVerified': true,
+              'status': 'VERIFIED',
+              'isActive': u.isActive,
+              'isOfficial': false,
+              'source': 'Leavexa Registered & Verified',
+              'model': u,
+            };
+          }).toList();
+
+          // 2. Official university faculty directory from lus.ac.bd
+          final officialItems = officialMembers.map((f) {
+            return {
+              'id': f.id,
+              'name': f.name,
+              'empId': f.id,
+              'department': f.department,
+              'deptCode': f.deptCode,
+              'designation': f.designation,
+              'email': '',
+              'phone': '',
+              'joined': 'Official University Directory',
+              'degrees': [f.designation],
+              'institution': 'Leading University (${f.department})',
+              'credentials': 'Faculty ID Verified',
+              'nidVerified': true,
+              'status': 'VERIFIED',
+              'isActive': true,
+              'isOfficial': true,
+              'imageUrl': f.imageUrl,
+              'profileUrl': f.profileUrl,
+              'source': 'Official University Directory • lus.ac.bd',
+            };
+          }).toList();
+
+          _allFacultyDirectory = [
+            ...registeredVerified,
+            ...officialItems,
+          ];
+
+          // 3. Pending approvals list (genuine registered accounts awaiting approval)
+          final combined = [
+            ...genuinePending,
+            ...genuineAll.where((u) => !u.isPending),
+          ];
+          _realTeachers = combined.map((u) {
+            final isApproved = u.isApproved;
+            return {
+              'id': u.uid,
+              'name': u.fullName,
+              'empId': u.employeeId,
+              'department': u.departmentName,
+              'designation': u.designation,
+              'submittedTime': 'Registered Member',
+              'submittedHours': 1,
+              'credentials': isApproved
+                  ? 'Faculty ID Verified'
+                  : 'Faculty ID: Awaiting Verification',
+              'avatarType': 'placeholder',
+              'avatarColor': const Color(0xFF0D9488),
+              'status': u.approvalStatus.toUpperCase(),
+              'institution': 'Leading University Faculty Member',
+              'nidVerified': isApproved,
+              'degrees': [u.designation, u.departmentName],
+              'model': u,
+            };
+          }).toList();
+        });
+      }
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> get _currentTeachers => _realTeachers;
+
+  List<Map<String, dynamic>> get _currentFacultyDirectory =>
+      _allFacultyDirectory;
 
   @override
   void didChangeDependencies() {
@@ -62,252 +235,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
     super.dispose();
   }
 
-  final List<Map<String, dynamic>> _teachers = [
-    {
-      'id': 'T-1045',
-      'name': 'Dr. Nazmul Hasan',
-      'empId': 'EMP-1045',
-      'department': 'Computer Science & Eng.',
-      'designation': 'Assistant Professor',
-      'submittedTime': 'Submitted 2h ago',
-      'submittedHours': 2,
-      'credentials': 'MSc & PhD Credentials Attached (PDF • 4.2 MB)',
-      'avatarType': 'placeholder', // 'img' placeholder box matching stitch mockup
-      'avatarColor': const Color(0xFF64748B),
-      'status': 'PENDING',
-      'institution': 'PhD from BUET, M.Sc from University of Melbourne',
-      'nidVerified': true,
-      'degrees': ['B.Sc in CSE (BUET)', 'M.Sc in CS (UniMelb)', 'Ph.D in AI/ML (BUET)'],
-    },
-    {
-      'id': 'T-1046',
-      'name': 'Farhana Akter',
-      'empId': 'EMP-1046',
-      'department': 'Electrical & Electronic Eng.',
-      'designation': 'Lecturer',
-      'submittedTime': 'Submitted 5h ago',
-      'submittedHours': 5,
-      'credentials': "National ID & Master's Transcript (PDF • 2.8 MB)",
-      'avatarType': 'female',
-      'avatarColor': const Color(0xFF0D9488),
-      'status': 'PENDING',
-      'institution': 'M.Sc from Dhaka University, B.Sc in EEE from RUET',
-      'nidVerified': true,
-      'degrees': ['B.Sc in EEE (RUET)', "M.Sc in Applied Physics (DU)"],
-    },
-    {
-      'id': 'T-1047',
-      'name': 'Mahruf Alam',
-      'empId': 'EMP-1047',
-      'department': 'Civil Engineering',
-      'designation': 'Lecturer',
-      'submittedTime': 'Submitted 1d ago',
-      'submittedHours': 24,
-      'credentials': 'B.Sc Certificate & IEB Accreditation (PDF • 6.1 MB)',
-      'avatarType': 'male',
-      'avatarColor': const Color(0xFF4F46E5),
-      'status': 'PENDING',
-      'institution': 'B.Sc in Civil Engineering from CUET, IEB Member #34892',
-      'nidVerified': true,
-      'degrees': ['B.Sc in Civil Engineering (CUET)'],
-    },
-    {
-      'id': 'T-1048',
-      'name': 'Dr. Sadia Tahsin',
-      'empId': 'EMP-1048',
-      'department': 'Architecture',
-      'designation': 'Associate Professor',
-      'submittedTime': 'Submitted 1d ago',
-      'submittedHours': 26,
-      'credentials': 'Doctorate Degree & Design Portfolio (PDF • 9.4 MB)',
-      'avatarType': 'female',
-      'avatarColor': const Color(0xFF7C3AED),
-      'status': 'PENDING',
-      'institution': 'Ph.D in Sustainable Architecture, NUS Singapore',
-      'nidVerified': true,
-      'degrees': ['B.Arch (BUET)', 'Ph.D in Architecture (NUS)'],
-    },
-    {
-      'id': 'T-1049',
-      'name': 'Engr. Tanvir Ahmed',
-      'empId': 'EMP-1049',
-      'department': 'Mechanical Engineering',
-      'designation': 'Lecturer',
-      'submittedTime': 'Submitted 2d ago',
-      'submittedHours': 48,
-      'credentials': 'M.Sc Degree & IEB Certification (PDF • 3.5 MB)',
-      'avatarType': 'male',
-      'avatarColor': const Color(0xFFEA580C),
-      'status': 'PENDING',
-      'institution': 'M.Sc in Mechanical Eng from IUT',
-      'nidVerified': true,
-      'degrees': ['B.Sc in ME (KUET)', 'M.Sc in ME (IUT)'],
-    },
-  ];
-
-  final List<Map<String, dynamic>> _facultyDirectory = [
-    {
-      'id': 'FAC-1024',
-      'name': 'Md. Arman',
-      'empId': 'FAC-1024',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Lecturer',
-      'email': 'arman@leavexa.edu',
-      'phone': '+880 1712-345678',
-      'joined': 'August 2022',
-      'degrees': ['B.Sc in CSE (BUET)'],
-      'institution': 'B.Sc in Computer Science & Eng. from BUET',
-      'credentials': 'B.Sc Certificate & Academic Transcripts (PDF • 2.4 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'EMP-H1005',
-      'name': 'Prof. Dr. Tariqul Islam',
-      'empId': 'EMP-H1005',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Professor & Head of Dept.',
-      'email': 'head.cse@leavexa.edu',
-      'phone': '+880 1711-987654',
-      'joined': 'January 2018',
-      'degrees': ['B.Sc in CSE (BUET)', 'Ph.D from University of Tokyo'],
-      'institution': 'Ph.D from Univ of Tokyo, Postdoc from NUS',
-      'credentials': 'Doctorate Degree & Official HoD Gazetted Order (PDF • 5.1 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1011',
-      'name': 'Dr. Sarah Ahmed',
-      'empId': 'FAC-1011',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Assistant Professor',
-      'email': 'sarah.cse@leavexa.edu',
-      'phone': '+880 1713-112233',
-      'joined': 'July 2020',
-      'degrees': ['B.Sc in CSE (DU)', 'Ph.D in Software Eng. (Monash)'],
-      'institution': 'Ph.D in Software Eng. from Monash University',
-      'credentials': 'Ph.D Certificate & IEEE Senior Membership (PDF • 3.8 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1018',
-      'name': 'Engr. Naila Parveen',
-      'empId': 'FAC-1018',
-      'department': 'Electrical & Electronic Eng.',
-      'deptCode': 'EEE',
-      'designation': 'Assistant Professor',
-      'email': 'naila.eee@leavexa.edu',
-      'phone': '+880 1714-445566',
-      'joined': 'January 2021',
-      'degrees': ['B.Sc in EEE (BUET)', 'M.Sc in Microelectronics (IUT)'],
-      'institution': 'M.Sc from IUT, IEB Chartered Engineer',
-      'credentials': 'M.Sc Degree & IEB Accreditation (PDF • 3.1 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1015',
-      'name': 'Dr. Farhana Yasmin',
-      'empId': 'FAC-1015',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Associate Professor',
-      'email': 'farhana.ai@leavexa.edu',
-      'phone': '+880 1715-778899',
-      'joined': 'March 2019',
-      'degrees': ['B.Sc in CSE (KUET)', 'Ph.D in AI/Robotics (KAIST)'],
-      'institution': 'Ph.D in Artificial Intelligence, KAIST Korea',
-      'credentials': 'Doctorate Degree & AI Lab Accreditation (PDF • 4.5 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1008',
-      'name': 'Prof. M. Kamal',
-      'empId': 'FAC-1008',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Professor',
-      'email': 'kamal.se@leavexa.edu',
-      'phone': '+880 1716-123456',
-      'joined': 'January 2015',
-      'degrees': ['B.Sc in CSE (BUET)', 'Ph.D from University of Cambridge'],
-      'institution': 'Ph.D in Distributed Systems, Cambridge UK',
-      'credentials': 'Doctorate Degree & Professorship Gazetted Records (PDF • 6.2 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1022',
-      'name': 'Ms. Sadia Karim',
-      'empId': 'FAC-1022',
-      'department': 'Computer Science & Eng.',
-      'deptCode': 'CSE',
-      'designation': 'Lecturer',
-      'email': 'sadia.karim@leavexa.edu',
-      'phone': '+880 1717-654321',
-      'joined': 'September 2023',
-      'degrees': ['B.Sc in CSE (RUET)'],
-      'institution': 'B.Sc in CSE (RUET), Gold Medalist',
-      'credentials': 'B.Sc Degree & Gold Medal Certificate (PDF • 2.9 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1030',
-      'name': 'Engr. Rafiqul Bari',
-      'empId': 'FAC-1030',
-      'department': 'Civil Engineering',
-      'deptCode': 'Civil',
-      'designation': 'Senior Lecturer',
-      'email': 'rafiqul.ce@leavexa.edu',
-      'phone': '+880 1718-987123',
-      'joined': 'February 2021',
-      'degrees': ['B.Sc in Civil Eng. (CUET)', 'M.Sc in Structural Eng. (BUET)'],
-      'institution': 'M.Sc in Structural Eng from BUET',
-      'credentials': 'M.Sc Degree & IEB Structural License (PDF • 4.1 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1048',
-      'name': 'Dr. Sadia Tahsin',
-      'empId': 'EMP-1048',
-      'department': 'Architecture',
-      'deptCode': 'Architecture',
-      'designation': 'Associate Professor',
-      'email': 'sadia.arch@leavexa.edu',
-      'phone': '+880 1720-776655',
-      'joined': 'October 2019',
-      'degrees': ['B.Arch (BUET)', 'Ph.D in Architecture (NUS)'],
-      'institution': 'Ph.D in Sustainable Architecture, NUS Singapore',
-      'credentials': 'Doctorate Degree & Design Portfolio (PDF • 9.4 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-    {
-      'id': 'FAC-1049',
-      'name': 'Engr. Tanvir Ahmed',
-      'empId': 'EMP-1049',
-      'department': 'Mechanical Engineering',
-      'deptCode': 'Mechanical',
-      'designation': 'Lecturer',
-      'email': 'tanvir.me@leavexa.edu',
-      'phone': '+880 1719-334455',
-      'joined': 'March 2023',
-      'degrees': ['B.Sc in ME (KUET)', 'M.Sc in ME (IUT)'],
-      'institution': 'M.Sc in Mechanical Eng from IUT',
-      'credentials': 'M.Sc Degree & IEB Certification (PDF • 3.5 MB)',
-      'nidVerified': true,
-      'status': 'VERIFIED',
-    },
-  ];
-
   void _onBottomNavTap(int index) {
     if (index == 3) {
       Navigator.pushReplacementNamed(context, AppRoutes.adminProfile);
@@ -316,17 +243,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
     setState(() => _currentNavIndex = index);
   }
 
-  void _onApproveTeacher(Map<String, dynamic> teacher) {
+  Future<void> _onApproveTeacher(Map<String, dynamic> teacher) async {
+    final userModel = teacher['model'] as UserModel?;
     setState(() {
       teacher['status'] = 'APPROVED';
       _pendingCount = (_pendingCount > 0) ? _pendingCount - 1 : 0;
       _approvedCount++;
     });
 
-    AppHelpers.showSuccess(
-      context,
-      '${teacher['name']} has been approved and registered!',
-    );
+    if (userModel != null) {
+      try {
+        await _userRepo.approveFaculty(userModel.uid);
+      } catch (e, stack) {
+      debugPrint('LOAD REAL FACULTY ERROR: $e\n$stack');
+    }
+    }
+
+    if (mounted) {
+      AppHelpers.showSuccess(
+        context,
+        '${teacher['name']} has been approved and registered!',
+      );
+    }
   }
 
   void _onRejectTeacher(Map<String, dynamic> teacher) {
@@ -338,8 +276,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
         final sheetBg = isDark ? const Color(0xFF1E293B) : Colors.white;
         final textPrimary = isDark ? Colors.white : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
 
         String selectedReason = 'Incomplete documentation';
         final reasons = [
@@ -360,8 +299,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ),
               decoration: BoxDecoration(
                 color: sheetBg,
-                borderRadius:
-                    const BorderRadius.vertical(top: Radius.circular(20)),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(20),
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -472,8 +412,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: ElevatedButton(
-                          onPressed: () {
+                          onPressed: () async {
                             Navigator.pop(ctx);
+                            final userModel = teacher['model'] as UserModel?;
                             setState(() {
                               teacher['status'] = 'REJECTED';
                               _pendingCount = (_pendingCount > 0)
@@ -481,10 +422,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                   : 0;
                               _rejectedCount++;
                             });
-                            AppHelpers.showError(
-                              context,
-                              'Registration rejected: $selectedReason',
-                            );
+                            if (userModel != null) {
+                              try {
+                                await _userRepo.rejectFaculty(
+                                  userModel.uid,
+                                  reason: selectedReason,
+                                );
+                              } catch (e, stack) {
+      debugPrint('LOAD REAL FACULTY ERROR: $e\n$stack');
+    }
+                            }
+                            if (context.mounted) {
+                              AppHelpers.showError(
+                                context,
+                                'Registration rejected: $selectedReason',
+                              );
+                            }
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFDC2626),
@@ -511,6 +464,841 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  Future<void> _toggleUserActive(Map<String, dynamic> faculty) async {
+    final current = faculty['isActive'] != false;
+    final newStatus = !current;
+    final uid = faculty['id'] as String;
+
+    setState(() {
+      faculty['isActive'] = newStatus;
+    });
+
+    try {
+      await _userRepo.setUserActive(uid, newStatus);
+      if (mounted) {
+        AppHelpers.showSuccess(
+          context,
+          '${faculty['name']} status updated to ${newStatus ? 'Active' : 'Inactive'}',
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          faculty['isActive'] = current;
+        });
+        AppHelpers.showError(context, 'Failed to update user status: $e');
+      }
+    }
+  }
+
+  void _openCreateStaffModal() {
+    final formKey = GlobalKey<FormState>();
+    final nameCtrl = TextEditingController();
+    final empIdCtrl = TextEditingController();
+    final emailCtrl = TextEditingController();
+    final passwordCtrl = TextEditingController();
+    final designationCtrl = TextEditingController(
+      text: 'Professor & Head of Department',
+    );
+    final phoneCtrl = TextEditingController();
+
+    String selectedRole = 'department_head';
+    String selectedDeptName = 'Computer Science & Engineering';
+    String selectedDeptId = 'dept_cse';
+    bool isSubmitting = false;
+    String? submitError;
+
+    final deptMap = {
+      'dept_cse': 'Computer Science & Engineering',
+      'dept_eee': 'Electrical & Electronic Engineering',
+      'dept_bba': 'Business Administration',
+      'dept_civil': 'Civil Engineering',
+      'dept_law': 'Department of Law',
+      'dept_arch': 'Department of Architecture',
+      'dept_public_health': 'Department of Public Health',
+      'dept_thm': 'Toursim & Hospitality Management',
+      'dept_islamic_studies': 'Department of Islamic Studies',
+      'dept_english': 'Department of English',
+    };
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final sheetBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+            final textPrimary = isDark ? Colors.white : const Color(0xFF0F172A);
+            final textSecondary =
+                isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+            final borderColor =
+                isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+            final inputBg =
+                isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+
+            return Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.9,
+              ),
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 16,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              decoration: BoxDecoration(
+                color: sheetBg,
+                borderRadius:
+                    const BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 40,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF334155)
+                                : const Color(0xFFE2E8F0),
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF1B4332)
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(
+                                  Icons.admin_panel_settings_rounded,
+                                  color: Color(0xFF1B4332),
+                                  size: 22,
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Create Staff Account',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w800,
+                                  color: textPrimary,
+                                  letterSpacing: -0.3,
+                                ),
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.close_rounded,
+                                color: textSecondary),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (submitError != null) ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            border:
+                                Border.all(color: const Color(0xFFFCA5A5)),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.error_outline,
+                                  color: Color(0xFFDC2626), size: 18),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  submitError!,
+                                  style: const TextStyle(
+                                    color: Color(0xFFDC2626),
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                      Text(
+                        'Role Selection',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ChoiceChip(
+                              key: const Key('role_department_head_chip'),
+                              label: const Text('Department Head'),
+                              selected: selectedRole == 'department_head',
+                              onSelected: (val) {
+                                if (val) {
+                                  setModalState(() {
+                                    selectedRole = 'department_head';
+                                    designationCtrl.text =
+                                        'Professor & Head of Department';
+                                  });
+                                }
+                              },
+                              selectedColor: const Color(0xFF1B4332)
+                                  .withValues(alpha: 0.15),
+                              labelStyle: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: selectedRole == 'department_head'
+                                    ? const Color(0xFF1B4332)
+                                    : textSecondary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: ChoiceChip(
+                              key: const Key('role_registrar_chip'),
+                              label: const Text('Registrar'),
+                              selected: selectedRole == 'registrar',
+                              onSelected: (val) {
+                                if (val) {
+                                  setModalState(() {
+                                    selectedRole = 'registrar';
+                                    designationCtrl.text = 'Registrar';
+                                  });
+                                }
+                              },
+                              selectedColor: const Color(0xFF1B4332)
+                                  .withValues(alpha: 0.15),
+                              labelStyle: TextStyle(
+                                fontWeight: FontWeight.w600,
+                                color: selectedRole == 'registrar'
+                                    ? const Color(0xFF1B4332)
+                                    : textSecondary,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      TextFormField(
+                        key: const Key('staff_name_field'),
+                        controller: nameCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Full Name *',
+                          prefixIcon: const Icon(Icons.person_outline),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                        validator: (val) =>
+                            (val == null || val.trim().isEmpty)
+                                ? 'Full Name is required'
+                                : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const Key('staff_empid_field'),
+                        controller: empIdCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Employee ID *',
+                          prefixIcon: const Icon(Icons.badge_outlined),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                        validator: (val) =>
+                            (val == null || val.trim().isEmpty)
+                                ? 'Employee ID is required'
+                                : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const Key('staff_email_field'),
+                        controller: emailCtrl,
+                        keyboardType: TextInputType.emailAddress,
+                        decoration: InputDecoration(
+                          labelText: 'Email Address *',
+                          prefixIcon: const Icon(Icons.email_outlined),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                        validator: (val) {
+                          if (val == null || val.trim().isEmpty) {
+                            return 'Email is required';
+                          }
+                          final regex = RegExp(
+                            r'^[\w.-]+@[\w-]+\.[a-z]{2,}$',
+                            caseSensitive: false,
+                          );
+                          if (!regex.hasMatch(val.trim())) {
+                            return 'Enter a valid email address';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const Key('staff_password_field'),
+                        controller: passwordCtrl,
+                        obscureText: true,
+                        decoration: InputDecoration(
+                          labelText: 'Password * (min 8 chars)',
+                          prefixIcon: const Icon(Icons.lock_outline),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                        validator: (val) {
+                          if (val == null || val.isEmpty) {
+                            return 'Password is required';
+                          }
+                          if (val.length < 8) {
+                            return 'Password must be at least 8 characters';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const Key('staff_designation_field'),
+                        controller: designationCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Designation *',
+                          prefixIcon: const Icon(Icons.work_outline),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                        validator: (val) =>
+                            (val == null || val.trim().isEmpty)
+                                ? 'Designation is required'
+                                : null,
+                      ),
+                      if (selectedRole == 'department_head') ...[
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          key: const Key('staff_dept_dropdown'),
+                          initialValue: selectedDeptId,
+                          decoration: InputDecoration(
+                            labelText: 'Department *',
+                            prefixIcon:
+                                const Icon(Icons.account_balance_outlined),
+                            filled: true,
+                            fillColor: inputBg,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(color: borderColor),
+                            ),
+                          ),
+                          items: deptMap.entries.map((e) {
+                            return DropdownMenuItem(
+                              value: e.key,
+                              child: Text(
+                                e.value,
+                                style: const TextStyle(fontSize: 13.5),
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (val) {
+                            if (val != null) {
+                              setModalState(() {
+                                selectedDeptId = val;
+                                selectedDeptName = deptMap[val] ?? '';
+                              });
+                            }
+                          },
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        key: const Key('staff_phone_field'),
+                        controller: phoneCtrl,
+                        keyboardType: TextInputType.phone,
+                        decoration: InputDecoration(
+                          labelText: 'Phone Number (Optional)',
+                          prefixIcon: const Icon(Icons.phone_outlined),
+                          filled: true,
+                          fillColor: inputBg,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: BorderSide(color: borderColor),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 48,
+                        child: ElevatedButton(
+                          key: const Key('submit_create_staff_button'),
+                          onPressed: isSubmitting
+                              ? null
+                              : () async {
+                                  if (!formKey.currentState!.validate()) {
+                                    return;
+                                  }
+                                  setModalState(() {
+                                    isSubmitting = true;
+                                    submitError = null;
+                                  });
+
+                                  try {
+                                    await _userRepo.createStaffAccount(
+                                      email: emailCtrl.text.trim(),
+                                      password: passwordCtrl.text,
+                                      fullName: nameCtrl.text.trim(),
+                                      employeeId: empIdCtrl.text.trim(),
+                                      role: selectedRole,
+                                      departmentId:
+                                          selectedRole == 'department_head'
+                                              ? selectedDeptId
+                                              : null,
+                                      departmentName:
+                                          selectedRole == 'department_head'
+                                              ? selectedDeptName
+                                              : null,
+                                      designation:
+                                          designationCtrl.text.trim(),
+                                      phone: phoneCtrl.text.trim().isEmpty
+                                          ? null
+                                          : phoneCtrl.text.trim(),
+                                    );
+
+                                    if (!mounted) return;
+                                    if (ctx.mounted) {
+                                      Navigator.pop(ctx);
+                                    }
+                                    _loadRealFaculty();
+                                    AppHelpers.showSuccess(
+                                      context,
+                                      'Staff account for ${nameCtrl.text.trim()} created successfully!',
+                                    );
+                                  } catch (e) {
+                                    setModalState(() {
+                                      isSubmitting = false;
+                                      submitError = e.toString().contains(
+                                              'already-exists')
+                                          ? 'Employee ID or email is already registered.'
+                                          : 'Failed to create staff account: $e';
+                                    });
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1B4332),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: isSubmitting
+                              ? const SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text(
+                                  'Create Account',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _openUniversityInfoModal() {
+    final infoService = UniversityInfoService();
+    bool isSyncing = false;
+    String? syncMessage;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            final sheetBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+            final textPrimary = isDark ? Colors.white : const Color(0xFF0F172A);
+            final textSecondary =
+                isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+            final boxBg =
+                isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+            final borderCol =
+                isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              decoration: BoxDecoration(
+                color: sheetBg,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1B4332).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.public_rounded,
+                              color: Color(0xFF1B4332),
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'University Official Info',
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w700,
+                                  color: textPrimary,
+                                ),
+                              ),
+                              Text(
+                                'Primary Source: https://lus.ac.bd/',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.close_rounded, color: textSecondary),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (syncMessage != null)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22C55E).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFF22C55E)),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.check_circle_outline, color: Color(0xFF22C55E), size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              syncMessage!,
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF15803D)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Expanded(
+                    child: FutureBuilder<List<dynamic>>(
+                      future: Future.wait([
+                        infoService.getOverview(),
+                        infoService.getOfficialDepartments(),
+                        infoService.getLeavePolicies(),
+                        infoService.getSyncMetadata(),
+                      ]),
+                      builder: (ctx, snapshot) {
+                        if (!snapshot.hasData) {
+                          return const Center(child: CircularProgressIndicator());
+                        }
+
+                        final overview = snapshot.data![0] as UniversityOverview;
+                        final departments = snapshot.data![1] as List<OfficialDepartment>;
+                        final policiesDoc = snapshot.data![2] as Map<String, dynamic>;
+                        final metadata = snapshot.data![3] as Map<String, dynamic>?;
+
+                        final leavePolicies = (policiesDoc['leavePolicies'] as Map<String, dynamic>?) ?? {};
+
+                        return ListView(
+                          children: [
+                            // ── Overview Card ──
+                            Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: boxBg,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: borderCol),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    overview.universityName,
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    overview.campusAddress,
+                                    style: TextStyle(fontSize: 12, color: textSecondary),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Icon(Icons.phone_outlined, size: 14, color: textSecondary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        'PABX: ${overview.pabx}',
+                                        style: TextStyle(fontSize: 12, color: textPrimary),
+                                      ),
+                                      const SizedBox(width: 14),
+                                      Icon(Icons.email_outlined, size: 14, color: textSecondary),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        overview.generalEmail,
+                                        style: TextStyle(fontSize: 12, color: textPrimary),
+                                      ),
+                                    ],
+                                  ),
+                                  if (metadata != null) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Last sync: ${metadata['status'] ?? 'SUCCESS'} (${metadata['lastSuccessfulSync'] != null ? 'Synced' : 'Cached'})',
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF15803D),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+
+                            // ── Official Departments ──
+                            Text(
+                              'Official Academic Departments (${departments.length})',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: departments.map((d) {
+                                return Chip(
+                                  label: Text(
+                                    '${d.name} (${d.code})',
+                                    style: const TextStyle(fontSize: 11),
+                                  ),
+                                  backgroundColor: boxBg,
+                                  side: BorderSide(color: borderCol),
+                                );
+                              }).toList(),
+                            ),
+                            const SizedBox(height: 14),
+
+                            // ── Leave Policies ──
+                            Text(
+                              'Faculty Leave Policies Integration',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            ...leavePolicies.entries.map((e) {
+                              final p = e.value as Map<String, dynamic>;
+                              final isVerified = p['status'] == 'VERIFIED';
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: boxBg,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isVerified
+                                        ? const Color(0xFF22C55E)
+                                        : borderCol,
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    Icon(
+                                      isVerified
+                                          ? Icons.verified_rounded
+                                          : Icons.warning_amber_rounded,
+                                      size: 18,
+                                      color: isVerified
+                                          ? const Color(0xFF22C55E)
+                                          : const Color(0xFFEAB308),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            p['name']?.toString() ?? e.key,
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              fontWeight: FontWeight.w600,
+                                              color: textPrimary,
+                                            ),
+                                          ),
+                                          Text(
+                                            p['status']?.toString() ?? '',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              color: isVerified
+                                                  ? const Color(0xFF15803D)
+                                                  : const Color(0xFFB45309),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      key: const Key('modal_sync_university_button'),
+                      onPressed: isSyncing
+                          ? null
+                          : () async {
+                              setModalState(() => isSyncing = true);
+                              try {
+                                final res = await infoService.triggerSync(force: true);
+                                setModalState(() {
+                                  isSyncing = false;
+                                  syncMessage =
+                                      'Synchronized successfully from lus.ac.bd (${res['totalDepartments'] ?? 11} departments, Study Leave policy verified).';
+                                });
+                              } catch (err) {
+                                setModalState(() {
+                                  isSyncing = false;
+                                  syncMessage = 'Sync completed with cached fallback: $err';
+                                });
+                              }
+                            },
+                      icon: isSyncing
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Icon(Icons.sync_rounded, size: 18),
+                      label: Text(
+                        isSyncing ? 'Synchronizing with lus.ac.bd...' : 'Synchronize Information from Website',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1B4332),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   void _openInspectModal(Map<String, dynamic> teacher) {
     showModalBottomSheet(
       context: context,
@@ -520,12 +1308,15 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
         final sheetBg = isDark ? const Color(0xFF1E293B) : Colors.white;
         final textPrimary = isDark ? Colors.white : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final boxBg =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
-        final borderCol =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final boxBg = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
+        final borderCol = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
 
         return Container(
           padding: EdgeInsets.only(
@@ -536,8 +1327,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
           decoration: BoxDecoration(
             color: sheetBg,
-            borderRadius:
-                const BorderRadius.vertical(top: Radius.circular(24)),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -605,31 +1395,42 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     const SizedBox(height: 2),
                     Text(
                       '${teacher['empId']} • ${teacher['department']} • ${teacher['designation']}',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        color: textSecondary,
-                      ),
+                      style: TextStyle(fontSize: 12.5, color: textSecondary),
                     ),
                     const SizedBox(height: 10),
                     const Divider(height: 1),
                     const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.check_circle,
-                          size: 16,
-                          color: Color(0xFF16A34A),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          'National ID Verified',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: textPrimary,
-                          ),
-                        ),
-                      ],
+                    Builder(
+                      builder: (context) {
+                        final isApproved = teacher['status'] == 'APPROVED' ||
+                            teacher['status'] == 'VERIFIED';
+                        return Row(
+                          children: [
+                            Icon(
+                              isApproved
+                                  ? Icons.check_circle_rounded
+                                  : Icons.pending_outlined,
+                              size: 16,
+                              color: isApproved
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFFD97706),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              isApproved
+                                  ? 'Faculty ID Verified'
+                                  : 'Faculty ID: Not Verified',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: isApproved
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFFD97706),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 6),
                     Row(
@@ -643,7 +1444,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            teacher['institution'] as String,
+                            teacher['institution'] as String? ??
+                                'Leading University Faculty Member',
                             style: TextStyle(
                               fontSize: 12.5,
                               color: textSecondary,
@@ -652,71 +1454,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ),
                         ),
                       ],
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 14),
-              Text(
-                'Attached Documentation:',
-                style: TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  color: textPrimary,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                decoration: BoxDecoration(
-                  color: boxBg,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: borderCol),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFEE2E2),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: const Center(
-                        child: Text(
-                          'PDF',
-                          style: TextStyle(
-                            color: Color(0xFFDC2626),
-                            fontWeight: FontWeight.w900,
-                            fontSize: 11,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        teacher['credentials'] as String,
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w600,
-                          color: textPrimary,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.download_rounded,
-                        color: Color(0xFF16A34A),
-                        size: 20,
-                      ),
-                      onPressed: () {
-                        AppHelpers.showSuccess(
-                          context,
-                          'Opening certificate file...',
-                        );
-                      },
                     ),
                   ],
                 ),
@@ -731,8 +1468,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           Navigator.pop(ctx);
                           _onRejectTeacher(teacher);
                         },
-                        icon: const Icon(Icons.close_rounded,
-                            size: 16, color: Color(0xFFDC2626)),
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          size: 16,
+                          color: Color(0xFFDC2626),
+                        ),
                         label: const Text(
                           'Reject',
                           style: TextStyle(
@@ -757,8 +1497,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           Navigator.pop(ctx);
                           _onApproveTeacher(teacher);
                         },
-                        icon: const Icon(Icons.check_rounded,
-                            size: 17, color: Colors.white),
+                        icon: const Icon(
+                          Icons.check_rounded,
+                          size: 17,
+                          color: Colors.white,
+                        ),
                         label: const Text(
                           'Approve',
                           style: TextStyle(
@@ -783,8 +1526,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   height: 46,
                   child: ElevatedButton.icon(
                     onPressed: () => Navigator.pop(ctx),
-                    icon: const Icon(Icons.check_circle_rounded,
-                        size: 18, color: Colors.white),
+                    icon: const Icon(
+                      Icons.check_circle_rounded,
+                      size: 18,
+                      color: Colors.white,
+                    ),
                     label: const Text(
                       'Verified Faculty Member • Done',
                       style: TextStyle(
@@ -813,21 +1559,26 @@ class _AdminDashboardState extends State<AdminDashboard> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -893,82 +1644,28 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  // ── Reusable Top Bar for Admin Dashboard Views ─────────────────────────────
+  // ── Reusable Top Bar for Admin Dashboard Views (Avatar only, no bell, no breadcrumb) ────
   Widget _buildTopBar({
-    required String breadcrumb,
     required bool isDark,
     required Color textPrimary,
     required Color textSecondary,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 20,
-        vertical: 10,
-      ),
+      padding: const EdgeInsets.only(left: 20, right: 20, top: 10, bottom: 4),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Text(
-            breadcrumb,
-            style: TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w500,
-              color: textSecondary,
+          // Admin Profile Avatar
+          GestureDetector(
+            onTap: () => Navigator.pushReplacementNamed(
+              context,
+              AppRoutes.adminProfile,
             ),
-          ),
-          Row(
-            children: [
-              IconButton(
-                icon: Icon(
-                  Icons.notifications_none_rounded,
-                  size: 23,
-                  color: textPrimary,
-                ),
-                onPressed: () {
-                  AppHelpers.showSuccess(
-                    context,
-                    'All notifications up to date',
-                  );
-                },
-              ),
-              const SizedBox(width: 4),
-              // Admin Profile Picture (profile.jpg)
-              GestureDetector(
-                onTap: () => Navigator.pushReplacementNamed(
-                  context,
-                  AppRoutes.adminProfile,
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.asset(
-                    'assets/images/profile.jpg',
-                    width: 36,
-                    height: 36,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) => Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF334155)
-                            : const Color(0xFF1B4332),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Center(
-                        child: Text(
-                          'AD',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            child: AppAvatar(
+              name: _adminName,
+              photoUrl: _adminPhotoUrl,
+              size: 38,
+            ),
           ),
         ],
       ),
@@ -983,321 +1680,415 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required Color textPrimary,
     required Color textSecondary,
   }) {
-    final activeList = _teachers
+    final activeList = _currentTeachers
         .where((t) => t['status'] == 'PENDING')
         .toList();
 
     if (!_sortNewestFirst) {
-      activeList.sort((a, b) =>
-          (b['submittedHours'] as int).compareTo(a['submittedHours'] as int));
+      activeList.sort(
+        (a, b) =>
+            (b['submittedHours'] as int).compareTo(a['submittedHours'] as int),
+      );
     } else {
-      activeList.sort((a, b) =>
-          (a['submittedHours'] as int).compareTo(b['submittedHours'] as int));
+      activeList.sort(
+        (a, b) =>
+            (a['submittedHours'] as int).compareTo(b['submittedHours'] as int),
+      );
     }
 
     return CustomScrollView(
       slivers: [
-        // ── 1. TOP BAR (Home breadcrumb + Bell + Avatar) ───────────
+        // ── 1. TOP BAR (Avatar only, no breadcrumb, no bell) ───────
         SliverToBoxAdapter(
           child: _buildTopBar(
-            breadcrumb: 'Home',
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
           ),
         ),
 
-                  // ── 2. ADMIN DASHBOARD HEADING & FALL TERM PILL ───────────
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+        // ── 2. ADMIN DASHBOARD HEADING & FALL TERM PILL ───────────
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Admin Dashboard',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          fontFamily: 'serif',
+                          color: textPrimary,
+                          letterSpacing: -0.4,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Fall Term 2026 Pill
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF1E3A8A).withValues(alpha: 0.35)
+                            : const Color(0xFFEEF2FF),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
+                              : const Color(0xFFE0E7FF),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Text(
-                                'Admin Dashboard',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w800,
-                                  fontFamily: 'serif',
-                                  color: textPrimary,
-                                  letterSpacing: -0.4,
-                                ),
-                              ),
-                              // Fall Term 2026 Pill
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isDark
-                                      ? const Color(0xFF1E3A8A)
-                                          .withValues(alpha: 0.35)
-                                      : const Color(0xFFEEF2FF),
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: isDark
-                                        ? const Color(0xFF3B82F6)
-                                            .withValues(alpha: 0.3)
-                                        : const Color(0xFFE0E7FF),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 6,
-                                      height: 6,
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFF3B82F6),
-                                        shape: BoxShape.circle,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'Fall Term 2026',
-                                      style: TextStyle(
-                                        fontSize: 11.5,
-                                        fontWeight: FontWeight.w600,
-                                        color: isDark
-                                            ? const Color(0xFF93C5FD)
-                                            : const Color(0xFF334155),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF3B82F6),
+                              shape: BoxShape.circle,
+                            ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(width: 6),
                           Text(
-                            'Manage pending teacher registrations and verify credentials.',
+                            'Fall Term 2026',
                             style: TextStyle(
-                              fontSize: 13,
-                              color: textSecondary,
-                              fontWeight: FontWeight.w400,
-                              height: 1.3,
-                            ),
-                          ),
-                          const SizedBox(height: 18),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // ── 3. TOP 3 STATS CARDS (Pending, Approved, Rejected) ─────
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Row(
-                        children: [
-                          // Card 1: Pending
-                          Expanded(
-                            child: _buildMetricCard(
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textSecondary: textSecondary,
-                              title: 'Pending',
-                              dotColor: const Color(0xFFD97706),
-                              value: '$_pendingCount',
-                              valueColor: const Color(0xFFB45309),
-                              caption: 'Needs Action',
-                              captionColor: const Color(0xFFB45309),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-
-                          // Card 2: Approved
-                          Expanded(
-                            child: _buildMetricCard(
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textSecondary: textSecondary,
-                              title: 'Approved',
-                              dotColor: const Color(0xFF16A34A),
-                              value: '$_approvedCount',
-                              valueColor: const Color(0xFF047857),
-                              caption: 'This Session',
-                              captionColor: const Color(0xFF047857),
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-
-                          // Card 3: Rejected
-                          Expanded(
-                            child: _buildMetricCard(
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textSecondary: textSecondary,
-                              title: 'Rejected',
-                              dotColor: const Color(0xFFDC2626),
-                              value: '$_rejectedCount',
-                              valueColor: const Color(0xFFDC2626),
-                              caption: 'Archived',
-                              captionColor: textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // ── 4. SECTION HEADER: "Pending Verifications" + SORT ─────
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                        left: 20,
-                        right: 20,
-                        top: 22,
-                        bottom: 12,
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                'Pending Verifications',
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w800,
-                                  color: textPrimary,
-                                  letterSpacing: -0.3,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 7,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFFEF3C7),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  '$_pendingCount',
-                                  style: const TextStyle(
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: Color(0xFFB45309),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _sortNewestFirst = !_sortNewestFirst;
-                              });
-                            },
-                            child: Row(
-                              children: [
-                                Text(
-                                  'Sort by Date',
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w600,
-                                    color: textSecondary,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                Icon(
-                                  Icons.swap_vert_rounded,
-                                  size: 18,
-                                  color: textSecondary,
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // ── 5. PENDING VERIFICATIONS LIST ─────────────────────────
-                  SliverPadding(
-                    padding: const EdgeInsets.symmetric(horizontal: 20),
-                    sliver: SliverList(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final teacher = activeList[index];
-                          return _buildTeacherCard(
-                            teacher: teacher,
-                            cardBg: cardBg,
-                            borderColor: borderColor,
-                            textPrimary: textPrimary,
-                            textSecondary: textSecondary,
-                            isDark: isDark,
-                          );
-                        },
-                        childCount: activeList.length,
-                      ),
-                    ),
-                  ),
-
-                  // ── 6. "VIEW ALL 12 PENDING REQUESTS →" BUTTON ─────────────
-                  SliverToBoxAdapter(
-                    child: Padding(
-                      padding: const EdgeInsets.only(
-                        left: 20,
-                        right: 20,
-                        top: 4,
-                        bottom: 24,
-                      ),
-                      child: GestureDetector(
-                        onTap: () {
-                          setState(() => _currentNavIndex = 1);
-                        },
-                        child: Container(
-                          width: double.infinity,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF1E293B)
-                                : const Color(0xFFEEF2FF),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
                               color: isDark
-                                  ? const Color(0xFF334155)
-                                  : const Color(0xFFE0E7FF),
+                                  ? const Color(0xFF93C5FD)
+                                  : const Color(0xFF334155),
                             ),
                           ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Text(
-                                'View All $_pendingCount Pending Requests',
-                                style: TextStyle(
-                                  fontSize: 13.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: isDark
-                                      ? const Color(0xFF93C5FD)
-                                      : const Color(0xFF334155),
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Icon(
-                                Icons.arrow_forward_rounded,
-                                size: 16,
-                                color: isDark
-                                    ? const Color(0xFF93C5FD)
-                                    : const Color(0xFF334155),
-                              ),
-                            ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Manage pending teacher registrations and verify credentials.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: textSecondary,
+                    fontWeight: FontWeight.w400,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    key: const Key('create_staff_account_button'),
+                    onPressed: _openCreateStaffModal,
+                    icon: const Icon(Icons.person_add_alt_1_rounded, size: 18),
+                    label: const Text(
+                      'Create Staff Account (Head / Registrar)',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B4332),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    key: const Key('university_info_sync_button'),
+                    onPressed: _openUniversityInfoModal,
+                    icon: const Icon(Icons.public_rounded, size: 18),
+                    label: const Text(
+                      'University Info & Policies (lus.ac.bd)',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFF1B4332),
+                      side: const BorderSide(color: Color(0xFF1B4332), width: 1.5),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+              ],
+            ),
+          ),
+        ),
+
+        // ── 3. TOP 3 STATS CARDS (Pending, Approved, Rejected) ─────
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                // Card 1: Pending
+                Expanded(
+                  child: _buildMetricCard(
+                    cardBg: cardBg,
+                    borderColor: borderColor,
+                    textSecondary: textSecondary,
+                    title: 'Pending',
+                    dotColor: const Color(0xFFD97706),
+                    value: '$_pendingCount',
+                    valueColor: const Color(0xFFB45309),
+                    caption: 'Needs Action',
+                    captionColor: const Color(0xFFB45309),
+                  ),
+                ),
+                const SizedBox(width: 10),
+
+                // Card 2: Approved
+                Expanded(
+                  child: _buildMetricCard(
+                    cardBg: cardBg,
+                    borderColor: borderColor,
+                    textSecondary: textSecondary,
+                    title: 'Approved',
+                    dotColor: const Color(0xFF16A34A),
+                    value: '$_approvedCount',
+                    valueColor: const Color(0xFF047857),
+                    caption: 'This Session',
+                    captionColor: const Color(0xFF047857),
+                  ),
+                ),
+                const SizedBox(width: 10),
+
+                // Card 3: Rejected
+                Expanded(
+                  child: _buildMetricCard(
+                    cardBg: cardBg,
+                    borderColor: borderColor,
+                    textSecondary: textSecondary,
+                    title: 'Rejected',
+                    dotColor: const Color(0xFFDC2626),
+                    value: '$_rejectedCount',
+                    valueColor: const Color(0xFFDC2626),
+                    caption: 'Archived',
+                    captionColor: textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── 4. SECTION HEADER: "Pending Verifications" + SORT ─────
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 22,
+              bottom: 12,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          'Pending Verifications',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: textPrimary,
+                            letterSpacing: -0.3,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '$_pendingCount',
+                          style: const TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFFB45309),
                           ),
                         ),
                       ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _sortNewestFirst = !_sortNewestFirst;
+                    });
+                  },
+                  child: Row(
+                    children: [
+                      Text(
+                        'Sort by Date',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: textSecondary,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.swap_vert_rounded,
+                        size: 18,
+                        color: textSecondary,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // ── 5. PENDING VERIFICATIONS LIST ─────────────────────────
+        if (activeList.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
+              child: Center(
+                child: Column(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF1E293B)
+                            : const Color(0xFFF1F5F9),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.check_circle_outline_rounded,
+                        size: 32,
+                        color: Color(0xFF16A34A),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'No Pending Registrations',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'All faculty registrations have been reviewed and processed.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            sliver: SliverList(
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final teacher = activeList[index];
+                return _buildTeacherCard(
+                  teacher: teacher,
+                  cardBg: cardBg,
+                  borderColor: borderColor,
+                  textPrimary: textPrimary,
+                  textSecondary: textSecondary,
+                  isDark: isDark,
+                );
+              }, childCount: activeList.length),
+            ),
+          ),
+
+        // ── 6. "VIEW ALL PENDING REQUESTS →" BUTTON ─────────────
+        if (activeList.isNotEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 4,
+                bottom: 24,
+              ),
+              child: GestureDetector(
+                onTap: () {
+                  setState(() => _currentNavIndex = 1);
+                },
+                child: Container(
+                  width: double.infinity,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF1E293B)
+                        : const Color(0xFFEEF2FF),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isDark
+                          ? const Color(0xFF334155)
+                          : const Color(0xFFE0E7FF),
                     ),
                   ),
-                ],
-              );
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        'View All $_pendingCount Pending Requests',
+                        style: TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: isDark
+                              ? const Color(0xFF93C5FD)
+                              : const Color(0xFF334155),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: isDark
+                            ? const Color(0xFF93C5FD)
+                            : const Color(0xFF334155),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1311,7 +2102,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required Color textPrimary,
     required Color textSecondary,
   }) {
-    final filtered = _teachers.where((t) {
+    final filtered = _currentTeachers.where((t) {
       final status = (t['status'] as String).toUpperCase();
       if (_approvalStatusFilter != 'ALL' && status != _approvalStatusFilter) {
         return false;
@@ -1331,10 +2122,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     return CustomScrollView(
       slivers: [
-        // 1. Top Bar
+        // 1. Top Bar (Avatar only, no breadcrumb, no bell)
         SliverToBoxAdapter(
           child: _buildTopBar(
-            breadcrumb: 'Approvals Queue',
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
@@ -1351,16 +2141,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Approvals Queue',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        fontFamily: 'serif',
-                        color: textPrimary,
-                        letterSpacing: -0.4,
+                    Expanded(
+                      child: Text(
+                        'Approvals Queue',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          fontFamily: 'serif',
+                          color: textPrimary,
+                          letterSpacing: -0.4,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -1428,8 +2222,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             )
                           : null,
                       border: InputBorder.none,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                     ),
                   ),
                 ),
@@ -1447,7 +2243,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
               padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Row(
                 children: [
-                  _buildStatusChip('ALL', 'All (${_teachers.length})', isDark),
+                  _buildStatusChip(
+                    'ALL',
+                    'All (${_currentTeachers.length})',
+                    isDark,
+                  ),
                   const SizedBox(width: 8),
                   _buildStatusChip(
                     'PENDING',
@@ -1457,13 +2257,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   const SizedBox(width: 8),
                   _buildStatusChip(
                     'APPROVED',
-                    'Approved (${_teachers.where((t) => t['status'] == 'APPROVED').length})',
+                    'Approved (${_currentTeachers.where((t) => t['status'] == 'APPROVED').length})',
                     isDark,
                   ),
                   const SizedBox(width: 8),
                   _buildStatusChip(
                     'REJECTED',
-                    'Rejected (${_teachers.where((t) => t['status'] == 'REJECTED').length})',
+                    'Rejected (${_currentTeachers.where((t) => t['status'] == 'REJECTED').length})',
                     isDark,
                   ),
                 ],
@@ -1508,20 +2308,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final teacher = filtered[index];
-                  return _buildTeacherCard(
-                    teacher: teacher,
-                    cardBg: cardBg,
-                    borderColor: borderColor,
-                    textPrimary: textPrimary,
-                    textSecondary: textSecondary,
-                    isDark: isDark,
-                  );
-                },
-                childCount: filtered.length,
-              ),
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final teacher = filtered[index];
+                return _buildTeacherCard(
+                  teacher: teacher,
+                  cardBg: cardBg,
+                  borderColor: borderColor,
+                  textPrimary: textPrimary,
+                  textSecondary: textSecondary,
+                  isDark: isDark,
+                );
+              }, childCount: filtered.length),
             ),
           ),
       ],
@@ -1570,7 +2367,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required Color textPrimary,
     required Color textSecondary,
   }) {
-    final filtered = _facultyDirectory.where((f) {
+    final filtered = _currentFacultyDirectory.where((f) {
       final deptCode = (f['deptCode'] as String? ?? '').toUpperCase();
       if (_facultyDeptFilter != 'ALL' &&
           deptCode != _facultyDeptFilter.toUpperCase()) {
@@ -1591,10 +2388,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     return CustomScrollView(
       slivers: [
-        // 1. Top Bar
+        // 1. Top Bar (Avatar only, no breadcrumb, no bell)
         SliverToBoxAdapter(
           child: _buildTopBar(
-            breadcrumb: 'Faculty Directory',
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
@@ -1611,16 +2407,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Faculty Directory',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        fontFamily: 'serif',
-                        color: textPrimary,
-                        letterSpacing: -0.4,
+                    Expanded(
+                      child: Text(
+                        'Faculty Directory',
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          fontFamily: 'serif',
+                          color: textPrimary,
+                          letterSpacing: -0.4,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
+                    const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 10,
@@ -1633,7 +2433,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        '${_facultyDirectory.length} Verified',
+                        '${_currentFacultyDirectory.length} Verified',
                         style: const TextStyle(
                           fontSize: 11.5,
                           fontWeight: FontWeight.w800,
@@ -1688,8 +2488,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                             )
                           : null,
                       border: InputBorder.none,
-                      contentPadding:
-                          const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 12,
+                      ),
                     ),
                   ),
                 ),
@@ -1698,7 +2500,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
         ),
 
-        // 3. Department Filter Chips
+        // 3. Department Filter Chips (Official Leading University Departments)
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(top: 14, bottom: 12),
@@ -1713,11 +2515,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   const SizedBox(width: 8),
                   _buildDeptChip('EEE', 'EEE', isDark),
                   const SizedBox(width: 8),
-                  _buildDeptChip('Civil', 'Civil', isDark),
+                  _buildDeptChip('BBA', 'BBA', isDark),
                   const SizedBox(width: 8),
-                  _buildDeptChip('Architecture', 'Architecture', isDark),
+                  _buildDeptChip('CE', 'Civil (CE)', isDark),
                   const SizedBox(width: 8),
-                  _buildDeptChip('Mechanical', 'Mechanical', isDark),
+                  _buildDeptChip('ARCH', 'Architecture', isDark),
+                  const SizedBox(width: 8),
+                  _buildDeptChip('LAW', 'Law', isDark),
+                  const SizedBox(width: 8),
+                  _buildDeptChip('IS', 'Islamic Studies', isDark),
+                  const SizedBox(width: 8),
+                  _buildDeptChip('MPH', 'Public Health', isDark),
+                  const SizedBox(width: 8),
+                  _buildDeptChip('THM', 'THM', isDark),
+                  const SizedBox(width: 8),
+                  _buildDeptChip('ENG', 'English', isDark),
                 ],
               ),
             ),
@@ -1760,20 +2572,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
           SliverPadding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final faculty = filtered[index];
-                  return _buildFacultyCard(
-                    faculty: faculty,
-                    isDark: isDark,
-                    cardBg: cardBg,
-                    borderColor: borderColor,
-                    textPrimary: textPrimary,
-                    textSecondary: textSecondary,
-                  );
-                },
-                childCount: filtered.length,
-              ),
+              delegate: SliverChildBuilderDelegate((context, index) {
+                final faculty = filtered[index];
+                return _buildFacultyCard(
+                  faculty: faculty,
+                  isDark: isDark,
+                  cardBg: cardBg,
+                  borderColor: borderColor,
+                  textPrimary: textPrimary,
+                  textSecondary: textSecondary,
+                );
+              }, childCount: filtered.length),
             ),
           ),
       ],
@@ -1868,38 +2677,130 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ),
                         ),
                         const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2.5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF064E3B).withValues(alpha: 0.5)
-                                : const Color(0xFFDCFCE7),
-                            borderRadius: BorderRadius.circular(5),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                Icons.verified_rounded,
-                                size: 11,
-                                color: Color(0xFF16A34A),
+                        if (faculty['isOfficial'] == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF1E3A8A).withValues(alpha: 0.5)
+                                  : const Color(0xFFEEF2FF),
+                              borderRadius: BorderRadius.circular(5),
+                              border: Border.all(
+                                color: isDark
+                                    ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
+                                    : const Color(0xFFE0E7FF),
                               ),
-                              SizedBox(width: 3),
-                              Text(
-                                'VERIFIED',
-                                style: TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 0.4,
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.public_rounded,
+                                  size: 11,
+                                  color: Color(0xFF2563EB),
+                                ),
+                                SizedBox(width: 3),
+                                Text(
+                                  'OFFICIAL DIRECTORY',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.4,
+                                    color: Color(0xFF2563EB),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                        else ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2.5,
+                            ),
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF064E3B).withValues(alpha: 0.5)
+                                  : const Color(0xFFDCFCE7),
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.verified_rounded,
+                                  size: 11,
                                   color: Color(0xFF16A34A),
                                 ),
-                              ),
-                            ],
+                                SizedBox(width: 3),
+                                Text(
+                                  'LEAVEXA VERIFIED',
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 0.4,
+                                    color: Color(0xFF16A34A),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 6),
+                          InkWell(
+                            key: Key('toggle_active_${faculty['id']}'),
+                            onTap: () => _toggleUserActive(faculty),
+                            borderRadius: BorderRadius.circular(5),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2.5,
+                              ),
+                              decoration: BoxDecoration(
+                                color: (faculty['isActive'] != false)
+                                    ? (isDark
+                                        ? const Color(0xFF064E3B)
+                                            .withValues(alpha: 0.5)
+                                        : const Color(0xFFDCFCE7))
+                                    : (isDark
+                                        ? const Color(0xFF7F1D1D)
+                                            .withValues(alpha: 0.5)
+                                        : const Color(0xFFFEE2E2)),
+                                borderRadius: BorderRadius.circular(5),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    (faculty['isActive'] != false)
+                                        ? Icons.check_circle_outline
+                                        : Icons.block,
+                                    size: 11,
+                                    color: (faculty['isActive'] != false)
+                                        ? const Color(0xFF16A34A)
+                                        : const Color(0xFFDC2626),
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    (faculty['isActive'] != false)
+                                        ? 'ACTIVE'
+                                        : 'INACTIVE',
+                                    style: TextStyle(
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w800,
+                                      letterSpacing: 0.4,
+                                      color: (faculty['isActive'] != false)
+                                          ? const Color(0xFF16A34A)
+                                          : const Color(0xFFDC2626),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ],
                     ),
                     const SizedBox(height: 2),
@@ -1950,10 +2851,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         const SizedBox(width: 8),
                         Text(
                           'Joined ${faculty['joined']}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: textSecondary,
-                          ),
+                          style: TextStyle(fontSize: 11, color: textSecondary),
                         ),
                       ],
                     ),
@@ -1972,15 +2870,22 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
             child: Row(
               children: [
-                const Icon(
-                  Icons.school_outlined,
+                Icon(
+                  (faculty['isOfficial'] == true)
+                      ? Icons.public_rounded
+                      : Icons.school_outlined,
                   size: 15,
-                  color: Color(0xFF3B82F6),
+                  color: (faculty['isOfficial'] == true)
+                      ? const Color(0xFF2563EB)
+                      : const Color(0xFF16A34A),
                 ),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    faculty['institution'] as String,
+                    faculty['source'] as String? ??
+                        (faculty['isOfficial'] == true
+                            ? 'Official University Directory • lus.ac.bd'
+                            : 'Leavexa Registered Faculty'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
@@ -2007,28 +2912,35 @@ class _AdminDashboardState extends State<AdminDashboard> {
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              Icon(Icons.email_outlined, size: 13, color: textSecondary),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  faculty['email'] as String,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, color: textSecondary),
-                ),
-              ),
-              const SizedBox(width: 10),
-              Icon(Icons.phone_outlined, size: 13, color: textSecondary),
-              const SizedBox(width: 4),
-              Text(
-                faculty['phone'] as String,
-                style: TextStyle(fontSize: 11.5, color: textSecondary),
-              ),
-            ],
-          ),
+          if ((faculty['email'] as String? ?? '').isNotEmpty ||
+              (faculty['phone'] as String? ?? '').isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if ((faculty['email'] as String? ?? '').isNotEmpty) ...[
+                  Icon(Icons.email_outlined, size: 13, color: textSecondary),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      faculty['email'] as String,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 11.5, color: textSecondary),
+                    ),
+                  ),
+                ],
+                if ((faculty['phone'] as String? ?? '').isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  Icon(Icons.phone_outlined, size: 13, color: textSecondary),
+                  const SizedBox(width: 4),
+                  Text(
+                    faculty['phone'] as String,
+                    style: TextStyle(fontSize: 11.5, color: textSecondary),
+                  ),
+                ],
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -2068,14 +2980,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                title,
-                style: TextStyle(
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w500,
-                  color: textSecondary,
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: textSecondary,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
+              const SizedBox(width: 4),
               Container(
                 width: 6,
                 height: 6,
@@ -2104,6 +3020,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
               fontWeight: FontWeight.w600,
               color: captionColor,
             ),
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -2248,10 +3165,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ),
                         Text(
                           teacher['submittedTime'] as String,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: textSecondary,
-                          ),
+                          style: TextStyle(fontSize: 11, color: textSecondary),
                         ),
                       ],
                     ),
@@ -2265,14 +3179,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
           // ── Middle Row: Credential Box with Shield & Inspect Button ────────
           Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 9,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
             decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF0F172A)
-                  : const Color(0xFFF1F5F9),
+              color: isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9),
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
                 color: isDark
@@ -2406,9 +3315,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
     // Strip prefixes: Dr., Engr., Prof., Mr., Ms., Mrs., Md.
     final clean = name
         .replaceAll(
-            RegExp(r'^(Dr\.|Engr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Md\.)\s*',
-                caseSensitive: false),
-            '')
+          RegExp(
+            r'^(Dr\.|Engr\.|Prof\.|Mr\.|Ms\.|Mrs\.|Md\.)\s*',
+            caseSensitive: false,
+          ),
+          '',
+        )
         .trim();
     final parts = clean.split(RegExp(r'\s+'));
     if (parts.length >= 2) {

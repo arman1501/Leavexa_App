@@ -16,10 +16,7 @@ import '../../core/utils/helpers.dart';
 class HeadRequestDetailsScreen extends StatefulWidget {
   final Map<String, dynamic>? requestData;
 
-  const HeadRequestDetailsScreen({
-    super.key,
-    this.requestData,
-  });
+  const HeadRequestDetailsScreen({super.key, this.requestData});
 
   @override
   State<HeadRequestDetailsScreen> createState() =>
@@ -50,42 +47,46 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_isInitialized) {
-      _rawArgs = widget.requestData ??
+      _rawArgs =
+          widget.requestData ??
           (ModalRoute.of(context)?.settings.arguments
               as Map<String, dynamic>?) ??
           {};
 
       _status = _rawArgs['status'] ?? 'Pending';
       _facultyName = _rawArgs['facultyName'] ?? 'Mr. Tanvir Hasan';
-      _designation = _rawArgs['designation'] ??
-          'Lecturer • Data Structures & Algorithms';
+      _designation =
+          _rawArgs['designation'] ?? 'Lecturer • Data Structures & Algorithms';
       _leaveType = _rawArgs['leaveType'] ?? 'Medical Leave';
       _datesFull = _rawArgs['datesFull'] ?? '25 Sep – 26 Sep, 2026';
       _duration = _rawArgs['duration'] ?? '2 Days';
-      _coverage = _rawArgs['teachingCovered'] ??
-          'Ms. Sadia Karim (CS 201 Lab)';
-      _reason = _rawArgs['reason'] ??
+      _coverage = _rawArgs['teachingCovered'] ?? 'Ms. Sadia Karim (CS 201 Lab)';
+      _reason =
+          _rawArgs['reason'] ??
           'Medical consultation & dental treatment (physician certificate uploaded).';
-      _attachmentName =
-          _rawArgs['attachmentName'] ?? 'Medical_Certificate.pdf';
+      _attachmentName = _rawArgs['attachmentName'] ?? 'Medical_Certificate.pdf';
       _attachmentSize = _rawArgs['attachmentSize'] ?? '2.4 MB';
       _submittedAt = _rawArgs['submittedAt'] ?? '24 Sep, 10:20 AM';
       _reviewedBy = _rawArgs['reviewedBy'] ?? 'Head of Department';
-      _reviewTime = _rawArgs['reviewedAt'] ??
+      _reviewTime =
+          _rawArgs['reviewedAt'] ??
           _rawArgs['reviewTime'] ??
           '24 Sep, 03:45 PM';
 
       // Comments based on initial status or passed argument
       if (_status == 'Approved') {
-        _comment = _rawArgs['reviewComment'] ??
+        _comment =
+            _rawArgs['reviewComment'] ??
             _rawArgs['comment'] ??
             'Leave approved. Ensure class coverage as mentioned.';
       } else if (_status == 'Changes Requested') {
-        _comment = _rawArgs['reviewComment'] ??
+        _comment =
+            _rawArgs['reviewComment'] ??
             _rawArgs['comment'] ??
             "Please update the doctor's certificate with the exact treatment date and re-submit.";
       } else if (_status == 'Rejected') {
-        _comment = _rawArgs['rejectionReason'] ??
+        _comment =
+            _rawArgs['rejectionReason'] ??
             _rawArgs['reviewComment'] ??
             _rawArgs['comment'] ??
             'The leave cannot be approved due to ongoing academic assessment during this period.';
@@ -121,12 +122,13 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
           _status = result['status'] ?? 'Approved';
           _reviewedBy = result['reviewedBy'] ?? 'Head of Department';
           _reviewTime = result['reviewTime'] ?? '24 Sep, 03:45 PM';
-          _comment = result['comment'] ??
+          _comment =
+              result['comment'] ??
               (_status == 'Approved'
                   ? 'Leave approved. Ensure class coverage as mentioned.'
                   : _status == 'Changes Requested'
-                      ? "Please update the doctor's certificate with the exact treatment date and re-submit."
-                      : 'The leave cannot be approved due to ongoing academic assessment during this period.');
+                  ? "Please update the doctor's certificate with the exact treatment date and re-submit."
+                  : 'The leave cannot be approved due to ongoing academic assessment during this period.');
         });
       } else if (result == true) {
         setState(() {
@@ -162,23 +164,29 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final primaryColor =
-            isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final primaryColor = isDark
+            ? const Color(0xFF047857)
+            : const Color(0xFF1B4332);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: PopScope(
@@ -196,11 +204,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                 centerTitle: false,
                 titleSpacing: 0,
                 leading: IconButton(
-                  icon: Icon(
-                    Icons.arrow_back,
-                    color: textPrimary,
-                    size: 22,
-                  ),
+                  icon: Icon(Icons.arrow_back, color: textPrimary, size: 22),
                   onPressed: _handleBack,
                 ),
                 title: Text(
@@ -241,8 +245,11 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                         value: 'Pending',
                         child: Row(
                           children: [
-                            Icon(Icons.access_time_rounded,
-                                size: 18, color: Color(0xFFD97706)),
+                            Icon(
+                              Icons.access_time_rounded,
+                              size: 18,
+                              color: Color(0xFFD97706),
+                            ),
                             SizedBox(width: 8),
                             Text('Preview: Pending'),
                           ],
@@ -252,8 +259,11 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                         value: 'Approved',
                         child: Row(
                           children: [
-                            Icon(Icons.check_circle_outline_rounded,
-                                size: 18, color: Color(0xFF16A34A)),
+                            Icon(
+                              Icons.check_circle_outline_rounded,
+                              size: 18,
+                              color: Color(0xFF16A34A),
+                            ),
                             SizedBox(width: 8),
                             Text('Preview: Approved'),
                           ],
@@ -263,8 +273,11 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                         value: 'Changes Requested',
                         child: Row(
                           children: [
-                            Icon(Icons.sync_rounded,
-                                size: 18, color: Color(0xFFD97706)),
+                            Icon(
+                              Icons.sync_rounded,
+                              size: 18,
+                              color: Color(0xFFD97706),
+                            ),
                             SizedBox(width: 8),
                             Text('Preview: Changes Requested'),
                           ],
@@ -274,8 +287,11 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                         value: 'Rejected',
                         child: Row(
                           children: [
-                            Icon(Icons.cancel_outlined,
-                                size: 18, color: Color(0xFFDC2626)),
+                            Icon(
+                              Icons.cancel_outlined,
+                              size: 18,
+                              color: Color(0xFFDC2626),
+                            ),
                             SizedBox(width: 8),
                             Text('Preview: Rejected'),
                           ],
@@ -392,8 +408,10 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                             child: const Row(
                               mainAxisAlignment: MainAxisAlignment.center,
                               children: [
-                                Icon(Icons.playlist_add_check_rounded,
-                                    size: 21),
+                                Icon(
+                                  Icons.playlist_add_check_rounded,
+                                  size: 21,
+                                ),
                                 SizedBox(width: 8),
                                 Text(
                                   'Review Request',
@@ -443,16 +461,10 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
             width: 42,
             height: 42,
             decoration: BoxDecoration(
-              color: isDark
-                  ? const Color(0xFF334155)
-                  : const Color(0xFFF1F5F9),
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              Icons.person,
-              size: 22,
-              color: textPrimary,
-            ),
+            child: Icon(Icons.person, size: 22, color: textPrimary),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -540,11 +552,13 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
         size: 26,
       );
       bannerTitle = 'Approved';
-      bannerTitleColor =
-          isDark ? const Color(0xFF34D399) : const Color(0xFF15803D);
+      bannerTitleColor = isDark
+          ? const Color(0xFF34D399)
+          : const Color(0xFF15803D);
       bannerSubtitle = 'The leave request has been approved.';
-      bannerSubColor =
-          isDark ? const Color(0xFFE2E8F0) : const Color(0xFF166534);
+      bannerSubColor = isDark
+          ? const Color(0xFFE2E8F0)
+          : const Color(0xFF166534);
     } else if (_status == 'Changes Requested') {
       bannerBg = isDark
           ? const Color(0xFF451A03).withValues(alpha: 0.35)
@@ -556,11 +570,13 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
         size: 26,
       );
       bannerTitle = 'Changes Requested';
-      bannerTitleColor =
-          isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309);
+      bannerTitleColor = isDark
+          ? const Color(0xFFFBBF24)
+          : const Color(0xFFB45309);
       bannerSubtitle = 'Revisions are required before approval.';
-      bannerSubColor =
-          isDark ? const Color(0xFFE2E8F0) : const Color(0xFF78350F);
+      bannerSubColor = isDark
+          ? const Color(0xFFE2E8F0)
+          : const Color(0xFF78350F);
     } else if (_status == 'Rejected') {
       bannerBg = isDark
           ? const Color(0xFF450A0A).withValues(alpha: 0.35)
@@ -572,11 +588,13 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
         size: 26,
       );
       bannerTitle = 'Rejected';
-      bannerTitleColor =
-          isDark ? const Color(0xFFF87171) : const Color(0xFFDC2626);
+      bannerTitleColor = isDark
+          ? const Color(0xFFF87171)
+          : const Color(0xFFDC2626);
       bannerSubtitle = 'The leave request has been rejected.';
-      bannerSubColor =
-          isDark ? const Color(0xFFE2E8F0) : const Color(0xFF991B1B);
+      bannerSubColor = isDark
+          ? const Color(0xFFE2E8F0)
+          : const Color(0xFF991B1B);
     } else {
       // Pending
       bannerBg = isDark
@@ -589,11 +607,13 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
         size: 26,
       );
       bannerTitle = 'Pending';
-      bannerTitleColor =
-          isDark ? const Color(0xFFFBBF24) : const Color(0xFFB45309);
+      bannerTitleColor = isDark
+          ? const Color(0xFFFBBF24)
+          : const Color(0xFFB45309);
       bannerSubtitle = 'Awaiting your review and decision.';
-      bannerSubColor =
-          isDark ? const Color(0xFFE2E8F0) : const Color(0xFF78350F);
+      bannerSubColor = isDark
+          ? const Color(0xFFE2E8F0)
+          : const Color(0xFF78350F);
     }
 
     return Container(
@@ -801,10 +821,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                     const SizedBox(height: 2),
                     Text(
                       _attachmentSize,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: textSecondary,
-                      ),
+                      style: TextStyle(fontSize: 12, color: textSecondary),
                     ),
                   ],
                 ),
@@ -973,11 +990,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
           children: [
             const Row(
               children: [
-                Icon(
-                  Icons.cancel_outlined,
-                  size: 18,
-                  color: Color(0xFFDC2626),
-                ),
+                Icon(Icons.cancel_outlined, size: 18, color: Color(0xFFDC2626)),
                 SizedBox(width: 8),
                 Text(
                   'Review Decision',
@@ -1149,10 +1162,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
         height: 18,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
-          border: Border.all(
-            color: const Color(0xFF16A34A),
-            width: 2,
-          ),
+          border: Border.all(color: const Color(0xFF16A34A), width: 2),
         ),
         child: Center(
           child: Container(
@@ -1214,11 +1224,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
               Column(
                 children: [
                   step1Icon,
-                  Container(
-                    width: 2,
-                    height: 34,
-                    color: lineColor,
-                  ),
+                  Container(width: 2, height: 34, color: lineColor),
                 ],
               ),
               const SizedBox(width: 12),
@@ -1237,10 +1243,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                     const SizedBox(height: 2),
                     Text(
                       _submittedAt,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: textSecondary,
-                      ),
+                      style: TextStyle(fontSize: 12, color: textSecondary),
                     ),
                   ],
                 ),
@@ -1269,10 +1272,7 @@ class _HeadRequestDetailsScreenState extends State<HeadRequestDetailsScreen> {
                     const SizedBox(height: 2),
                     Text(
                       step2Sub,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: textSecondary,
-                      ),
+                      style: TextStyle(fontSize: 12, color: textSecondary),
                     ),
                   ],
                 ),

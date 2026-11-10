@@ -4,22 +4,287 @@
 //  administrative controls, dark mode switcher & secure logout.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/faculty_profile_state.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/user_repository.dart';
+import '../../services/storage_service.dart';
+import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class AdminProfileScreen extends StatefulWidget {
-  const AdminProfileScreen({super.key});
+  final AuthRepository? authRepository;
+
+  const AdminProfileScreen({super.key, this.authRepository});
 
   @override
   State<AdminProfileScreen> createState() => _AdminProfileScreenState();
 }
 
 class _AdminProfileScreenState extends State<AdminProfileScreen> {
+  late final AuthRepository _authRepository =
+      widget.authRepository ?? AuthRepository();
+  late final StorageService _storageService = StorageService();
+  late final UserRepository _userRepo = UserRepository();
+  bool _isLoggingOut = false;
+  bool _isUploadingPhoto = false;
+  String _adminName = 'System Administrator';
+  String _adminEmail = 'admin@leavexa.edu';
+  String? _photoUrl;
+  int _pendingCount = 0;
+  int _approvedCount = 0;
   final int _currentNavIndex = 3; // 3: Profile tab active
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      final user = await _authRepository.getCurrentUserProfile();
+      if (user != null && mounted) {
+        setState(() {
+          _adminName = user.fullName;
+          _adminEmail = user.email;
+          _photoUrl = user.photoUrl;
+        });
+      }
+      final pending = await _userRepo.getPendingFaculty();
+      final all = await _userRepo.getAllFaculty();
+      if (mounted) {
+        setState(() {
+          _pendingCount = pending.length;
+          _approvedCount = all.where((u) => u.isApproved).length;
+        });
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _onPickProfileImage() async {
+    if (_isUploadingPhoto) return;
+    try {
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      final file = File(picked.path);
+      final size = await file.length();
+      if (size > StorageService.maxProfileImageSizeBytes) {
+        if (mounted) {
+          AppHelpers.showError(
+            context,
+            'Image exceeds the maximum allowed size of 5 MB.',
+          );
+        }
+        return;
+      }
+
+      final uid =
+          _authRepository.currentUserId ?? AuthRepository.activeUser?.uid;
+      if (uid == null) return;
+
+      setState(() => _isUploadingPhoto = true);
+
+      final downloadUrl = await _storageService.uploadProfileImage(
+        uid: uid,
+        file: file,
+        previousPhotoUrl: _photoUrl,
+      );
+
+      await _userRepo.updateUser(uid, {'photoUrl': downloadUrl});
+
+      if (mounted) {
+        setState(() {
+          _photoUrl = downloadUrl;
+          _isUploadingPhoto = false;
+        });
+        AppHelpers.showSuccess(context, 'Profile photo updated successfully!');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isUploadingPhoto = false);
+        AppHelpers.showError(context, 'Failed to update photo: $e');
+      }
+    }
+  }
+
+  Future<void> _onRemoveProfilePhoto() async {
+    if (_isUploadingPhoto || _photoUrl == null || _photoUrl!.isEmpty) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Remove Profile Photo'),
+        content: const Text(
+          'Are you sure you want to remove your profile photo? Your avatar will display your initials instead.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+            ),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final uid =
+        _authRepository.currentUserId ?? AuthRepository.activeUser?.uid;
+    if (uid == null) return;
+
+    setState(() => _isUploadingPhoto = true);
+
+    try {
+      final oldUrl = _photoUrl;
+      if (oldUrl != null && oldUrl.isNotEmpty) {
+        try {
+          await _storageService.deleteByUrl(oldUrl);
+        } catch (_) {}
+      }
+
+      await _userRepo.updateUser(uid, {'photoUrl': null});
+
+      if (mounted) {
+        setState(() {
+          _photoUrl = null;
+          _isUploadingPhoto = false;
+        });
+        AppHelpers.showSuccess(context, 'Profile photo removed successfully.');
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isUploadingPhoto = false);
+        AppHelpers.showError(context, 'Failed to remove photo: $e');
+      }
+    }
+  }
+
+  void _showPhotoOptions(bool isDark) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        final textPrimary =
+            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
+        final textSecondary =
+            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final hasPhoto = _photoUrl != null && _photoUrl!.isNotEmpty;
+
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF334155)
+                        : const Color(0xFFE2E8F0),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'Profile Photo (Optional)',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    color: textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Upload, change or remove your profile picture anytime.',
+                  style: TextStyle(fontSize: 12, color: textSecondary),
+                ),
+                const SizedBox(height: 12),
+                ListTile(
+                  leading: const Icon(
+                    Icons.photo_library_outlined,
+                    color: Color(0xFF1B4332),
+                  ),
+                  title: Text(
+                    hasPhoto ? 'Change Photo' : 'Upload Photo',
+                    style: TextStyle(
+                      color: textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    'Choose an image from your gallery',
+                    style: TextStyle(color: textSecondary, fontSize: 12),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _onPickProfileImage();
+                  },
+                ),
+                if (hasPhoto)
+                  ListTile(
+                    leading: const Icon(
+                      Icons.delete_outline_rounded,
+                      color: Color(0xFFEF4444),
+                    ),
+                    title: const Text(
+                      'Remove Photo',
+                      style: TextStyle(
+                        color: Color(0xFFEF4444),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    subtitle: Text(
+                      'Use a clean initials avatar instead',
+                      style: TextStyle(color: textSecondary, fontSize: 12),
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _onRemoveProfilePhoto();
+                    },
+                  ),
+                ListTile(
+                  leading: Icon(
+                    Icons.close_rounded,
+                    color: textSecondary,
+                  ),
+                  title: Text(
+                    'Cancel',
+                    style: TextStyle(color: textSecondary),
+                  ),
+                  onTap: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   void _onBottomNavTap(int index) {
     if (index == _currentNavIndex) return;
@@ -50,32 +315,139 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
   void _onLogOut() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Admin Log Out'),
-        content: const Text(
-          'Are you sure you want to log out of the Administrator Portal?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+      barrierDismissible: !_isLoggingOut,
+      builder: (dialogCtx) => PopScope(
+        canPop: !_isLoggingOut,
+        child: Dialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFDC2626),
-              foregroundColor: Colors.white,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFFEE2E2),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(
+                    Icons.logout_rounded,
+                    color: Color(0xFFDC2626),
+                    size: 26,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Log Out',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Are you sure you want to log out of the Administrator Portal?',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    color: Color(0xFF64748B),
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 24),
+
+                // ── TOP BUTTON: Log Out (Destructive Red) ───────────────────
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFDC2626),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: _isLoggingOut
+                        ? null
+                        : () async {
+                            Navigator.pop(dialogCtx);
+                            setState(() => _isLoggingOut = true);
+                            try {
+                              await _authRepository.logout();
+                              AppThemeState.instance.resetToLightMode();
+                              FacultyProfileState.instance.reset();
+                              if (mounted) {
+                                Navigator.pushNamedAndRemoveUntil(
+                                  context,
+                                  AppRoutes.login,
+                                  (route) => false,
+                                );
+                              }
+                            } catch (e) {
+                              if (mounted) {
+                                setState(() => _isLoggingOut = false);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text('Failed to log out: $e'),
+                                    backgroundColor: const Color(0xFFDC2626),
+                                  ),
+                                );
+                              }
+                            }
+                          },
+                    child: _isLoggingOut
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text(
+                            'Log Out',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+
+                // ── BOTTOM BUTTON: Cancel (Neutral Outlined) ────────────────
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                      foregroundColor: const Color(0xFF475569),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    onPressed: () => Navigator.pop(dialogCtx),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushNamedAndRemoveUntil(
-                context,
-                AppRoutes.login,
-                (route) => false,
-              );
-            },
-            child: const Text('Log Out'),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -86,25 +458,32 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final dividerColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
-        final surfaceAlt =
-            isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final dividerColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
+        final surfaceAlt = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -112,8 +491,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             body: SafeArea(
               child: SingleChildScrollView(
                 physics: const ClampingScrollPhysics(),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 14,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -179,14 +560,16 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                       ),
                       child: Column(
                         children: [
-                          // Admin Avatar with green online dot
-                          Stack(
-                            children: [
-                              Container(
-                                width: 84,
-                                height: 84,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
+                          // Admin Avatar with camera icon & tap to change/remove photo
+                          GestureDetector(
+                            onTap: () => _showPhotoOptions(isDark),
+                            behavior: HitTestBehavior.opaque,
+                            child: Stack(
+                              children: [
+                                AppAvatar(
+                                  name: _adminName,
+                                  photoUrl: _photoUrl,
+                                  size: 84,
                                   border: Border.all(
                                     color: isDark
                                         ? const Color(0xFF3B82F6)
@@ -194,54 +577,62 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                                     width: 2.5,
                                   ),
                                 ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(42),
-                                  child: Image.asset(
-                                    'assets/images/profile.jpg',
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (context, error, stackTrace) =>
-                                        Container(
-                                      color: const Color(0xFF1B4332),
-                                      child: const Center(
-                                        child: Text(
-                                          'ADM',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 20,
-                                          ),
+                                if (_isUploadingPhoto)
+                                  Container(
+                                    width: 84,
+                                    height: 84,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color:
+                                          Colors.black.withValues(alpha: 0.45),
+                                    ),
+                                    child: const Center(
+                                      child: SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.5,
+                                          valueColor:
+                                              AlwaysStoppedAnimation<Color>(
+                                                  Colors.white),
                                         ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              ),
-                              Positioned(
-                                bottom: 2,
-                                right: 4,
-                                child: Container(
-                                  width: 18,
-                                  height: 18,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF16A34A),
-                                    shape: BoxShape.circle,
-                                    border: Border.all(
+                                Positioned(
+                                  bottom: 0,
+                                  right: 0,
+                                  child: Container(
+                                    width: 26,
+                                    height: 26,
+                                    decoration: BoxDecoration(
                                       color: isDark
-                                          ? const Color(0xFF1E293B)
-                                          : Colors.white,
-                                      width: 2.5,
+                                          ? const Color(0xFF3B82F6)
+                                          : const Color(0xFF1B4332),
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: isDark
+                                            ? const Color(0xFF1E293B)
+                                            : Colors.white,
+                                        width: 2,
+                                      ),
+                                    ),
+                                    child: const Icon(
+                                      Icons.camera_alt_outlined,
+                                      size: 13,
+                                      color: Colors.white,
                                     ),
                                   ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
 
                           const SizedBox(height: 14),
 
                           // Name
                           Text(
-                            'System Administrator',
+                            _adminName,
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 21,
@@ -288,14 +679,16 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                                 ),
                                 decoration: BoxDecoration(
                                   color: isDark
-                                      ? const Color(0xFF1E3A8A)
-                                          .withValues(alpha: 0.4)
+                                      ? const Color(
+                                          0xFF1E3A8A,
+                                        ).withValues(alpha: 0.4)
                                       : const Color(0xFFEEF2FF),
                                   borderRadius: BorderRadius.circular(16),
                                   border: Border.all(
                                     color: isDark
-                                        ? const Color(0xFF3B82F6)
-                                            .withValues(alpha: 0.4)
+                                        ? const Color(
+                                            0xFF3B82F6,
+                                          ).withValues(alpha: 0.4)
                                         : const Color(0xFFE0E7FF),
                                   ),
                                 ),
@@ -367,7 +760,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             label: 'Teachers',
-                            value: '231',
+                            value: '$_approvedCount',
                             color: const Color(0xFF047857),
                             icon: Icons.people_outline_rounded,
                           ),
@@ -380,7 +773,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             label: 'Pending',
-                            value: '12',
+                            value: '$_pendingCount',
                             color: const Color(0xFFB45309),
                             icon: Icons.pending_actions_rounded,
                           ),
@@ -435,7 +828,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           _AdminInfoRow(
                             icon: Icons.alternate_email_rounded,
                             label: 'Admin Email',
-                            value: 'admin@leavexa.edu',
+                            value: _adminEmail,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                           ),
@@ -495,48 +888,6 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                               width: 38,
                               height: 38,
                               decoration: BoxDecoration(
-                                color: const Color(0xFFFEF3C7),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.assignment_outlined,
-                                color: Color(0xFFB45309),
-                                size: 20,
-                              ),
-                            ),
-                            title: Text(
-                              'Teacher Verifications Queue',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: textPrimary,
-                              ),
-                            ),
-                            subtitle: Text(
-                              '12 applications waiting for review',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: textSecondary,
-                              ),
-                            ),
-                            trailing: Icon(
-                              Icons.chevron_right_rounded,
-                              color: textSecondary,
-                            ),
-                            onTap: () {
-                              Navigator.pushReplacementNamed(
-                                context,
-                                AppRoutes.adminDashboard,
-                                arguments: {'tab': 1},
-                              );
-                            },
-                          ),
-                          Divider(height: 1, color: dividerColor),
-                          ListTile(
-                            leading: Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
                                 color: const Color(0xFFDCFCE7),
                                 borderRadius: BorderRadius.circular(8),
                               ),
@@ -555,7 +906,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                               ),
                             ),
                             subtitle: Text(
-                              '231 registered faculty members',
+                              '$_approvedCount registered faculty members',
                               style: TextStyle(
                                 fontSize: 12,
                                 color: textSecondary,
@@ -572,44 +923,6 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                                 arguments: {'tab': 2},
                               );
                             },
-                          ),
-                          Divider(height: 1, color: dividerColor),
-                          ListTile(
-                            leading: Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFEEF2FF),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.brightness_6_outlined,
-                                color: Color(0xFF4F46E5),
-                                size: 20,
-                              ),
-                            ),
-                            title: Text(
-                              'Theme Appearance',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: textPrimary,
-                              ),
-                            ),
-                            subtitle: Text(
-                              isDark ? 'Dark Mode Active' : 'Light Mode Active',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: textSecondary,
-                              ),
-                            ),
-                            trailing: Switch(
-                              value: isDark,
-                              activeColor: const Color(0xFF34D399),
-                              onChanged: (val) {
-                                AppThemeState.instance.toggleTheme(val);
-                              },
-                            ),
                           ),
                         ],
                       ),

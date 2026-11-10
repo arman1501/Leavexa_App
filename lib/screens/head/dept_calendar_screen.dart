@@ -28,7 +28,8 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
   bool _isFilterViewActive = false; // True: Screen 3
 
   // Filter state for Screen 3
-  String _selectedStatusFilter = 'All'; // 'All', 'Approved', 'Pending', 'Upcoming'
+  String _selectedStatusFilter =
+      'All'; // 'All', 'Approved', 'Pending', 'Upcoming'
   String _selectedLeaveType = 'All Leave Types';
   String _selectedFaculty = 'All Faculty';
   bool _isFilterCardExpanded = true;
@@ -57,25 +58,32 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final primaryColor =
-            isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
-        final subtleBg =
-            isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final primaryColor = isDark
+            ? const Color(0xFF047857)
+            : const Color(0xFF1B4332);
+        final subtleBg = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -348,8 +356,16 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                 // Row 1: 30(other), 31(other), 1, 2, 3, 4(green dot), 5
                 Row(
                   children: [
-                    _buildDayCell(day: 30, isOtherMonth: true, textPrimary: textPrimary),
-                    _buildDayCell(day: 31, isOtherMonth: true, textPrimary: textPrimary),
+                    _buildDayCell(
+                      day: 30,
+                      isOtherMonth: true,
+                      textPrimary: textPrimary,
+                    ),
+                    _buildDayCell(
+                      day: 31,
+                      isOtherMonth: true,
+                      textPrimary: textPrimary,
+                    ),
                     _buildDayCell(day: 1, textPrimary: textPrimary),
                     _buildDayCell(day: 2, textPrimary: textPrimary),
                     _buildDayCell(day: 3, textPrimary: textPrimary),
@@ -449,9 +465,21 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                       textPrimary: textPrimary,
                     ),
                     _buildDayCell(day: 30, textPrimary: textPrimary),
-                    _buildDayCell(day: 1, isOtherMonth: true, textPrimary: textPrimary),
-                    _buildDayCell(day: 2, isOtherMonth: true, textPrimary: textPrimary),
-                    _buildDayCell(day: 3, isOtherMonth: true, textPrimary: textPrimary),
+                    _buildDayCell(
+                      day: 1,
+                      isOtherMonth: true,
+                      textPrimary: textPrimary,
+                    ),
+                    _buildDayCell(
+                      day: 2,
+                      isOtherMonth: true,
+                      textPrimary: textPrimary,
+                    ),
+                    _buildDayCell(
+                      day: 3,
+                      isOtherMonth: true,
+                      textPrimary: textPrimary,
+                    ),
                   ],
                 ),
 
@@ -758,11 +786,26 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
             children: [
               _buildStatCol('12', 'Total Leave', textPrimary, textSecondary),
               _buildDivider(isDark),
-              _buildStatCol('7', 'Approved', const Color(0xFF16A34A), textSecondary),
+              _buildStatCol(
+                '7',
+                'Approved',
+                const Color(0xFF16A34A),
+                textSecondary,
+              ),
               _buildDivider(isDark),
-              _buildStatCol('3', 'Pending', const Color(0xFFF59E0B), textSecondary),
+              _buildStatCol(
+                '3',
+                'Pending',
+                const Color(0xFFF59E0B),
+                textSecondary,
+              ),
               _buildDivider(isDark),
-              _buildStatCol('2', 'Upcoming', const Color(0xFF2563EB), textSecondary),
+              _buildStatCol(
+                '2',
+                'Upcoming',
+                const Color(0xFF2563EB),
+                textSecondary,
+              ),
             ],
           ),
         ],
@@ -841,7 +884,9 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               children: [
                 GestureDetector(
                   onTap: () {
-                    setState(() => _isFilterCardExpanded = !_isFilterCardExpanded);
+                    setState(
+                      () => _isFilterCardExpanded = !_isFilterCardExpanded,
+                    );
                   },
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1114,7 +1159,9 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                 const SizedBox(height: 14),
                 Divider(
                   height: 1,
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                  color: isDark
+                      ? const Color(0xFF334155)
+                      : const Color(0xFFF1F5F9),
                 ),
                 const SizedBox(height: 14),
 
@@ -1135,7 +1182,9 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                 const SizedBox(height: 14),
                 Divider(
                   height: 1,
-                  color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                  color: isDark
+                      ? const Color(0xFF334155)
+                      : const Color(0xFFF1F5F9),
                 ),
                 const SizedBox(height: 14),
 
@@ -1306,10 +1355,10 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                   color: isSelected
                       ? Colors.white
                       : isOtherMonth
-                          ? (isDark
-                              ? const Color(0xFF475569)
-                              : const Color(0xFFCBD5E1))
-                          : textPrimary,
+                      ? (isDark
+                            ? const Color(0xFF475569)
+                            : const Color(0xFFCBD5E1))
+                      : textPrimary,
                 ),
               ),
               const SizedBox(height: 3),
@@ -1354,9 +1403,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
           border: Border.all(
             color: isSelected
                 ? primaryColor
-                : (isDark
-                    ? const Color(0xFF334155)
-                    : const Color(0xFFE2E8F0)),
+                : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
           ),
         ),
         child: Text(
@@ -1406,10 +1453,7 @@ class _LegendDot extends StatelessWidget {
         Container(
           width: 6,
           height: 6,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 5),
         Text(

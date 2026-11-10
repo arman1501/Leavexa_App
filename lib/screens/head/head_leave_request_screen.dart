@@ -7,14 +7,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../widgets/app_avatar.dart';
 
 class HeadLeaveRequestScreen extends StatefulWidget {
   final Map<String, dynamic>? requestData;
 
-  const HeadLeaveRequestScreen({
-    super.key,
-    this.requestData,
-  });
+  const HeadLeaveRequestScreen({super.key, this.requestData});
 
   @override
   State<HeadLeaveRequestScreen> createState() => _HeadLeaveRequestScreenState();
@@ -70,11 +68,15 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
   @override
   Widget build(BuildContext context) {
     // Extract dynamic arguments if passed, otherwise default to screenshot reference
-    final args = widget.requestData ??
-        (ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?) ??
-        {};
+    final rawArgs = ModalRoute.of(context)?.settings.arguments;
+    final Map<String, dynamic> args = widget.requestData ??
+        (rawArgs is Map<String, dynamic>
+            ? rawArgs
+            : (rawArgs is String ? {'id': rawArgs, 'applicationId': rawArgs} : {}));
 
     final facultyName = args['facultyName'] ?? 'Md. Hasan Rahman';
+    final String? facultyPhotoUrl =
+        args['applicantPhotoUrl'] ?? args['photoUrl'];
     final facultyId = args['facultyId'] ?? 'CSE-1024';
     final designation =
         args['designation'] ?? 'Lecturer • Computer Science & Engineering';
@@ -86,8 +88,8 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
     final duration = args['duration'] ?? '3 Days';
     final durationType = args['durationType'] ?? 'Working Days';
     final reason = args['reason'] ?? 'Personal work';
-    final coverage = args['teachingCovered'] ??
-        'Lecture modules covered by peer faculty.';
+    final coverage =
+        args['teachingCovered'] ?? 'Lecture modules covered by peer faculty.';
     final remainingDays = args['remainingDays'] ?? '07 Days';
     final totalDays = args['totalDays'] ?? '10';
     final attachmentName =
@@ -98,23 +100,29 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final surfaceAlt =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF1F5F9);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final surfaceAlt = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -125,11 +133,7 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
               scrolledUnderElevation: 0,
               centerTitle: false,
               leading: IconButton(
-                icon: Icon(
-                  Icons.arrow_back,
-                  color: textPrimary,
-                  size: 22,
-                ),
+                icon: Icon(Icons.arrow_back, color: textPrimary, size: 22),
                 onPressed: () => Navigator.pop(context),
               ),
               title: Text(
@@ -215,26 +219,10 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
                             ),
                             child: Row(
                               children: [
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(100),
-                                  child: Image.asset(
-                                    'assets/images/profile.jpg',
-                                    width: 46,
-                                    height: 46,
-                                    fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => Container(
-                                      width: 46,
-                                      height: 46,
-                                      decoration: BoxDecoration(
-                                        shape: BoxShape.circle,
-                                        color: surfaceAlt,
-                                      ),
-                                      child: Icon(
-                                        Icons.person,
-                                        color: textSecondary,
-                                      ),
-                                    ),
-                                  ),
+                                AppAvatar(
+                                  name: facultyName,
+                                  photoUrl: facultyPhotoUrl,
+                                  size: 46,
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(
@@ -338,11 +326,11 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
                                       ),
                                       decoration: BoxDecoration(
                                         color: isDark
-                                            ? const Color(0xFF064E3B)
-                                                .withValues(alpha: 0.6)
+                                            ? const Color(
+                                                0xFF064E3B,
+                                              ).withValues(alpha: 0.6)
                                             : const Color(0xFFD1FAE5),
-                                        borderRadius:
-                                            BorderRadius.circular(20),
+                                        borderRadius: BorderRadius.circular(20),
                                       ),
                                       child: Text(
                                         leaveType,
@@ -666,8 +654,9 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
                                     ),
                                     decoration: BoxDecoration(
                                       color: isDark
-                                          ? const Color(0xFF1E3A8A)
-                                              .withValues(alpha: 0.4)
+                                          ? const Color(
+                                              0xFF1E3A8A,
+                                            ).withValues(alpha: 0.4)
                                           : const Color(0xFFEFF6FF),
                                       borderRadius: BorderRadius.circular(8),
                                     ),
@@ -804,8 +793,9 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
                             onPressed: _onReject,
                             style: OutlinedButton.styleFrom(
                               backgroundColor: isDark
-                                  ? const Color(0xFF451A03)
-                                      .withValues(alpha: 0.4)
+                                  ? const Color(
+                                      0xFF451A03,
+                                    ).withValues(alpha: 0.4)
                                   : const Color(0xFFFFE4E6),
                               side: BorderSide(
                                 color: isDark

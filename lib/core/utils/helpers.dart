@@ -10,15 +10,30 @@ class AppHelpers {
 
   // ── SnackBar ───────────────────────────────────────────────────────────────
   static void showSuccess(BuildContext context, String message) {
-    _showSnackBar(context, message, AppColors.approved, Icons.check_circle_outline_rounded);
+    _showSnackBar(
+      context,
+      message,
+      AppColors.approved,
+      Icons.check_circle_outline_rounded,
+    );
   }
 
   static void showError(BuildContext context, String message) {
-    _showSnackBar(context, message, AppColors.rejected, Icons.error_outline_rounded);
+    _showSnackBar(
+      context,
+      message,
+      AppColors.rejected,
+      Icons.error_outline_rounded,
+    );
   }
 
   static void showInfo(BuildContext context, String message) {
-    _showSnackBar(context, message, AppColors.primary, Icons.info_outline_rounded);
+    _showSnackBar(
+      context,
+      message,
+      AppColors.primary,
+      Icons.info_outline_rounded,
+    );
   }
 
   static void _showSnackBar(
@@ -70,9 +85,7 @@ class AppHelpers {
     return showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: Text(
           title,
           style: const TextStyle(
@@ -83,16 +96,15 @@ class AppHelpers {
         ),
         content: Text(
           message,
-          style: const TextStyle(
-            fontSize: 14,
-            color: AppColors.textSecondary,
-          ),
+          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: Text(cancelLabel,
-                style: const TextStyle(color: AppColors.textSecondary)),
+            child: Text(
+              cancelLabel,
+              style: const TextStyle(color: AppColors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
@@ -111,10 +123,30 @@ class AppHelpers {
 
   // ── String ─────────────────────────────────────────────────────────────────
   static String initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.isEmpty) return '';
-    if (parts.length == 1) return parts[0][0].toUpperCase();
-    return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+
+    // Remove common prefixes (Dr., Prof., Engr., Mr., Ms., Mrs.)
+    final cleaned = trimmed
+        .replaceAll(
+          RegExp(
+            r'^(?:(Dr\.|Prof\.|Engr\.|Mr\.|Ms\.|Mrs\.)\s*)+',
+            caseSensitive: false,
+          ),
+          '',
+        )
+        .trim();
+
+    final target = cleaned.isNotEmpty ? cleaned : trimmed;
+    final parts =
+        target.split(RegExp(r'\s+')).where((p) => p.isNotEmpty).toList();
+
+    if (parts.isEmpty) return '?';
+    if (parts.length == 1) {
+      final p = parts[0];
+      return p.length >= 2 ? p.substring(0, 2).toUpperCase() : p.toUpperCase();
+    }
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
   }
 
   static String capitalize(String value) {
@@ -125,19 +157,27 @@ class AppHelpers {
   // ── Status ─────────────────────────────────────────────────────────────────
   static Color statusColor(String status) {
     switch (status.toLowerCase()) {
-      case 'approved': return AppColors.approved;
-      case 'rejected': return AppColors.rejected;
-      case 'forwarded': return AppColors.forwarded;
-      default: return AppColors.pending;
+      case 'approved':
+        return AppColors.approved;
+      case 'rejected':
+        return AppColors.rejected;
+      case 'forwarded':
+        return AppColors.forwarded;
+      default:
+        return AppColors.pending;
     }
   }
 
   static Color statusBgColor(String status) {
     switch (status.toLowerCase()) {
-      case 'approved': return AppColors.approvedBg;
-      case 'rejected': return AppColors.rejectedBg;
-      case 'forwarded': return AppColors.forwardedBg;
-      default: return AppColors.pendingBg;
+      case 'approved':
+        return AppColors.approvedBg;
+      case 'rejected':
+        return AppColors.rejectedBg;
+      case 'forwarded':
+        return AppColors.forwardedBg;
+      default:
+        return AppColors.pendingBg;
     }
   }
 

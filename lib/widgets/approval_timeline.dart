@@ -45,9 +45,12 @@ class ApprovalTimeline extends StatelessWidget {
 
   String _registrarStatus() {
     switch (application.status) {
-      case 'approved': return 'approved';
-      case 'rejected': return 'rejected';
-      default: return 'pending';
+      case 'approved':
+        return 'approved';
+      case 'rejected':
+        return 'rejected';
+      default:
+        return 'pending';
     }
   }
 
@@ -72,18 +75,24 @@ class _TimelineStep extends StatelessWidget {
   Color get _dotColor {
     switch (status) {
       case 'approved':
-      case 'forwarded': return AppColors.approved;
-      case 'rejected':  return AppColors.rejected;
-      default:          return AppColors.border;
+      case 'forwarded':
+        return AppColors.approved;
+      case 'rejected':
+        return AppColors.rejected;
+      default:
+        return AppColors.border;
     }
   }
 
   IconData get _icon {
     switch (status) {
       case 'approved':
-      case 'forwarded': return Icons.check_rounded;
-      case 'rejected':  return Icons.close_rounded;
-      default:          return Icons.circle_outlined;
+      case 'forwarded':
+        return Icons.check_rounded;
+      case 'rejected':
+        return Icons.close_rounded;
+      default:
+        return Icons.circle_outlined;
     }
   }
 

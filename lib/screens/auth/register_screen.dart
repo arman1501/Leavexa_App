@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
-import '../../services/auth_service.dart';
+import '../../core/constants/app_constants.dart';
+import '../../models/registration_state.dart';
+import '../../repositories/auth_repository.dart';
+import '../../services/auth_exception.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Leavexa – Register Screen
@@ -10,7 +13,9 @@ import '../../services/auth_service.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class RegisterScreen extends StatefulWidget {
-  const RegisterScreen({super.key});
+  final AuthRepository? authRepository;
+
+  const RegisterScreen({super.key, this.authRepository});
 
   @override
   State<RegisterScreen> createState() => _RegisterScreenState();
@@ -28,6 +33,9 @@ class _RegisterScreenState extends State<RegisterScreen>
   final _passCtrl = TextEditingController();
   final _confirmPassCtrl = TextEditingController();
 
+  late final AuthRepository _authRepository =
+      widget.authRepository ?? AuthRepository();
+
   // Dropdown states
   String? _selectedDept;
   String? _selectedDesignation;
@@ -37,6 +45,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   bool _obscureConfirmPass = true;
   bool _agreeTerms = false;
   bool _isLoading = false;
+  RegistrationState _regState = const RegistrationState();
 
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fade;
@@ -90,6 +99,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   }
 
   Future<void> _onRegister() async {
+    if (_isLoading || _regState.isLoading) return;
     if (!_formKey.currentState!.validate()) return;
 
     if (_selectedDept == null || _selectedDesignation == null) {
@@ -112,20 +122,39 @@ class _RegisterScreenState extends State<RegisterScreen>
       return;
     }
 
-    setState(() => _isLoading = true);
+    setState(() {
+      _isLoading = true;
+      _regState = const RegistrationState(
+        step: RegistrationStep.validating,
+        message: 'Validating form details...',
+      );
+    });
 
     try {
-      await AuthService().registerFaculty(
-        fullName: _nameCtrl.text,
-        employeeId: _empIdCtrl.text,
-        email: _emailCtrl.text,
-        phone: _phoneCtrl.text,
+      await _authRepository.registerFaculty(
+        fullName: _nameCtrl.text.trim(),
+        employeeId: _empIdCtrl.text.trim().toUpperCase(),
+        email: _emailCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
         departmentName: _selectedDept!,
         designation: _selectedDesignation!,
         password: _passCtrl.text,
+        onStateChanged: (state) {
+          if (mounted) {
+            setState(() => _regState = state);
+          }
+        },
       );
 
       if (!mounted) return;
+
+      setState(() {
+        _regState = const RegistrationState(
+          step: RegistrationStep.completed,
+          message:
+              'Registration successful! Your account is pending admin approval.',
+        );
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -138,6 +167,25 @@ class _RegisterScreenState extends State<RegisterScreen>
 
       await Future.delayed(const Duration(seconds: 2));
       if (mounted) Navigator.pop(context);
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      final isRecoverable = e.code == AuthErrorCode.networkError;
+      setState(() {
+        _regState = RegistrationState(
+          step: isRecoverable
+              ? RegistrationStep.recoverableFailure
+              : RegistrationStep.permanentFailure,
+          message: e.message,
+          errorCode: e.code,
+          isRecoverable: isRecoverable,
+        );
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
 
@@ -153,11 +201,50 @@ class _RegisterScreenState extends State<RegisterScreen>
           message = 'Password must be at least 6 characters.';
           break;
         case 'network-request-failed':
-          message = 'Network error. Please check your internet connection.';
+          message = 'Unable to connect. Check your internet and try again.';
           break;
         default:
           message = e.message ?? 'Registration failed. Please try again.';
       }
+
+      final isRecoverable = e.code == 'network-request-failed';
+      setState(() {
+        _regState = RegistrationState(
+          step: isRecoverable
+              ? RegistrationStep.recoverableFailure
+              : RegistrationStep.permanentFailure,
+          message: message,
+          errorCode: e.code,
+          isRecoverable: isRecoverable,
+        );
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      final isRecoverable =
+          e.code == 'unavailable' || e.code == 'deadline-exceeded';
+      final message = isRecoverable
+          ? 'Unable to connect. Check your internet and try again.'
+          : (e.code == 'permission-denied'
+              ? 'This Employee ID is already registered or registration was denied.'
+              : (e.message ?? 'Registration failed. Please try again.'));
+
+      setState(() {
+        _regState = RegistrationState(
+          step: isRecoverable
+              ? RegistrationStep.recoverableFailure
+              : RegistrationStep.permanentFailure,
+          message: message,
+          errorCode: e.code,
+          isRecoverable: isRecoverable,
+        );
+      });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -167,10 +254,17 @@ class _RegisterScreenState extends State<RegisterScreen>
       );
     } catch (e) {
       if (!mounted) return;
-
+      final message = 'Registration failed: $e';
+      setState(() {
+        _regState = RegistrationState(
+          step: RegistrationStep.recoverableFailure,
+          message: message,
+          isRecoverable: true,
+        );
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Registration failed: $e'),
+          content: Text(message),
           backgroundColor: const Color(0xFFDC2626),
         ),
       );
@@ -199,7 +293,6 @@ class _RegisterScreenState extends State<RegisterScreen>
         backgroundColor: const Color(0xFFFFFFFF),
         body: Stack(
           children: [
-
             // ── MAIN FORM CONTENT ────────────────────────────────────────────
             SafeArea(
               child: SingleChildScrollView(
@@ -261,9 +354,24 @@ class _RegisterScreenState extends State<RegisterScreen>
                             controller: _empIdCtrl,
                             hint: 'Employee ID',
                             prefixIcon: Icons.badge_outlined,
-                            validator: (v) => v == null || v.trim().isEmpty
-                                ? 'Please enter your employee ID'
-                                : null,
+                            textCapitalization: TextCapitalization.characters,
+                            inputFormatters: [
+                              FilteringTextInputFormatter.allow(
+                                RegExp(r'[a-zA-Z0-9_\-]'),
+                              ),
+                            ],
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Please enter your employee ID';
+                              }
+                              if (v.trim().length < 3) {
+                                return 'Employee ID must be at least 3 characters';
+                              }
+                              if (v.trim().length > 30) {
+                                return 'Employee ID must not exceed 30 characters';
+                              }
+                              return null;
+                            },
                           ),
 
                           const SizedBox(height: 8),
@@ -274,9 +382,22 @@ class _RegisterScreenState extends State<RegisterScreen>
                             hint: 'University Email',
                             prefixIcon: Icons.email_outlined,
                             keyboardType: TextInputType.emailAddress,
-                            validator: (v) => v == null || v.trim().isEmpty
-                                ? 'Please enter your university email'
-                                : null,
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) {
+                                return 'Please enter your university email';
+                              }
+                              final regex = RegExp(
+                                r'^[\w.-]+@[\w-]+\.[a-z]{2,}$',
+                                caseSensitive: false,
+                              );
+                              if (!regex.hasMatch(v.trim())) {
+                                return 'Enter a valid email address.';
+                              }
+                              if (AppConstants.isReservedStaffEmail(v.trim())) {
+                                return 'This email is reserved for administrative staff.';
+                              }
+                              return null;
+                            },
                           ),
 
                           const SizedBox(height: 8),
@@ -325,8 +446,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                             prefixIcon: Icons.lock_outline_rounded,
                             obscureText: _obscurePass,
                             suffixIcon: GestureDetector(
-                              onTap: () => setState(
-                                      () => _obscurePass = !_obscurePass),
+                              onTap: () =>
+                                  setState(() => _obscurePass = !_obscurePass),
                               child: Icon(
                                 _obscurePass
                                     ? Icons.visibility_off_outlined
@@ -335,9 +456,15 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 color: const Color(0xFF94A3B8),
                               ),
                             ),
-                            validator: (v) => v == null || v.isEmpty
-                                ? 'Please enter a password'
-                                : null,
+                            validator: (v) {
+                              if (v == null || v.isEmpty) {
+                                return 'Please enter a password';
+                              }
+                              if (v.length < 6) {
+                                return 'Password must be at least 6 characters.';
+                              }
+                              return null;
+                            },
                           ),
 
                           const SizedBox(height: 8),
@@ -349,9 +476,10 @@ class _RegisterScreenState extends State<RegisterScreen>
                             prefixIcon: Icons.lock_outline_rounded,
                             obscureText: _obscureConfirmPass,
                             suffixIcon: GestureDetector(
-                              onTap: () => setState(() =>
-                              _obscureConfirmPass =
-                              !_obscureConfirmPass),
+                              onTap: () => setState(
+                                () =>
+                                    _obscureConfirmPass = !_obscureConfirmPass,
+                              ),
                               child: Icon(
                                 _obscureConfirmPass
                                     ? Icons.visibility_off_outlined
@@ -381,26 +509,26 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 height: 20,
                                 child: Checkbox(
                                   value: _agreeTerms,
-                                  onChanged: (v) => setState(
-                                          () => _agreeTerms = v ?? false),
+                                  onChanged: (v) =>
+                                      setState(() => _agreeTerms = v ?? false),
                                   activeColor: const Color(0xFF1B4332),
                                   shape: RoundedRectangleBorder(
-                                    borderRadius:
-                                    BorderRadius.circular(4),
+                                    borderRadius: BorderRadius.circular(4),
                                   ),
                                   side: const BorderSide(
                                     color: Color(0xFF94A3B8),
                                     width: 1.5,
                                   ),
                                   materialTapTargetSize:
-                                  MaterialTapTargetSize.shrinkWrap,
+                                      MaterialTapTargetSize.shrinkWrap,
                                 ),
                               ),
                               const SizedBox(width: 10),
                               Expanded(
                                 child: GestureDetector(
                                   onTap: () => setState(
-                                          () => _agreeTerms = !_agreeTerms),
+                                    () => _agreeTerms = !_agreeTerms,
+                                  ),
                                   child: RichText(
                                     text: const TextSpan(
                                       style: TextStyle(
@@ -408,8 +536,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                         color: Color(0xFF64748B),
                                       ),
                                       children: [
-                                        TextSpan(
-                                            text: 'I agree to the '),
+                                        TextSpan(text: 'I agree to the '),
                                         TextSpan(
                                           text: 'Terms & Privacy Policy',
                                           style: TextStyle(
@@ -487,6 +614,9 @@ class _InputField extends StatelessWidget {
   final TextInputType keyboardType;
   final String? Function(String?)? validator;
 
+  final List<TextInputFormatter>? inputFormatters;
+  final TextCapitalization textCapitalization;
+
   const _InputField({
     required this.controller,
     required this.hint,
@@ -494,6 +624,8 @@ class _InputField extends StatelessWidget {
     this.obscureText = false,
     this.suffixIcon,
     this.keyboardType = TextInputType.text,
+    this.inputFormatters,
+    this.textCapitalization = TextCapitalization.none,
     this.validator,
   });
 
@@ -503,6 +635,8 @@ class _InputField extends StatelessWidget {
       controller: controller,
       obscureText: obscureText,
       keyboardType: keyboardType,
+      inputFormatters: inputFormatters,
+      textCapitalization: textCapitalization,
       validator: validator,
       style: const TextStyle(
         fontSize: 14.5,
@@ -523,12 +657,11 @@ class _InputField extends StatelessWidget {
         prefixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         suffixIcon: suffixIcon != null
             ? Padding(
-          padding: const EdgeInsets.only(right: 14),
-          child: suffixIcon,
-        )
+                padding: const EdgeInsets.only(right: 14),
+                child: suffixIcon,
+              )
             : null,
-        suffixIconConstraints:
-        const BoxConstraints(minWidth: 0, minHeight: 0),
+        suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         filled: true,
         fillColor: const Color(0xFFF8FAFC),
         contentPadding: const EdgeInsets.symmetric(
@@ -581,6 +714,7 @@ class _DropdownField extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<String>(
+      isExpanded: true,
       initialValue: value,
       onChanged: onChanged,
       icon: const Icon(
@@ -626,10 +760,9 @@ class _DropdownField extends StatelessWidget {
         ),
       ),
       items: items
-          .map((item) => DropdownMenuItem<String>(
-        value: item,
-        child: Text(item),
-      ))
+          .map(
+            (item) => DropdownMenuItem<String>(value: item, child: Text(item)),
+          )
           .toList(),
     );
   }
@@ -684,33 +817,33 @@ class _RegisterButtonState extends State<_RegisterButton>
           child: Center(
             child: widget.isLoading
                 ? const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(
-                color: Colors.white,
-                strokeWidth: 2.5,
-              ),
-            )
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2.5,
+                    ),
+                  )
                 : const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Create Account',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.white,
-                    letterSpacing: 0.3,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Create Account',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                      SizedBox(width: 8),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ],
                   ),
-                ),
-                SizedBox(width: 8),
-                Icon(
-                  Icons.arrow_forward_rounded,
-                  color: Colors.white,
-                  size: 18,
-                ),
-              ],
-            ),
           ),
         ),
       ),

@@ -1,9 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../auth/login_screen.dart';
+
+import '../../core/constants/app_strings.dart';
+import '../../core/routes/app_routes.dart';
+import '../../core/theme/app_theme.dart';
+import '../../models/user_model.dart';
+import '../../repositories/auth_repository.dart';
 
 class SplashScreen extends StatefulWidget {
-  const SplashScreen({super.key});
+  final AuthRepository? authRepository;
+
+  const SplashScreen({super.key, this.authRepository});
 
   @override
   State<SplashScreen> createState() => _SplashScreenState();
@@ -13,6 +20,9 @@ class _SplashScreenState extends State<SplashScreen>
     with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
   late final Animation<double> _fade;
+  late final AuthRepository _authRepository =
+      widget.authRepository ?? AuthRepository();
+  bool _hasNavigated = false;
 
   @override
   void initState() {
@@ -31,21 +41,44 @@ class _SplashScreenState extends State<SplashScreen>
 
     _ctrl.forward();
 
-    // Auto-navigate to Login after 1.5 seconds
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (!mounted) return;
-      Navigator.pushReplacement(
-        context,
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 400),
-          pageBuilder: (_, a, b) => const LoginScreen(),
-          transitionsBuilder: (_, anim, b, child) => FadeTransition(
-            opacity: anim,
-            child: child,
-          ),
-        ),
-      );
-    });
+    _restoreSessionAndNavigate();
+  }
+
+  Future<void> _restoreSessionAndNavigate() async {
+    UserModel? user;
+    try {
+      final results = await Future.wait<dynamic>([
+        _authRepository.restoreSession(),
+        Future<void>.delayed(const Duration(milliseconds: 1200)),
+      ]);
+      user = results.first as UserModel?;
+    } catch (_) {
+      // Fails safely on any error (no session, missing profile,
+      // invalid role, pending/rejected/inactive, network failure)
+      user = null;
+    }
+
+    if (!mounted || _hasNavigated) return;
+    _hasNavigated = true;
+
+    AppThemeState.instance.resetToLightMode();
+
+    final targetRoute = _determineRoute(user);
+    Navigator.pushReplacementNamed(context, targetRoute);
+  }
+
+  String _determineRoute(UserModel? user) {
+    if (user == null) return AppRoutes.login;
+
+    return switch (user.role) {
+      AppStrings.roleFaculty when user.isActiveAndApproved =>
+        AppRoutes.facultyDashboard,
+      AppStrings.roleDeptHead when user.isActive => AppRoutes.headDashboard,
+      AppStrings.roleRegistrar when user.isActive =>
+        AppRoutes.registrarDashboard,
+      AppStrings.roleAdmin when user.isActive => AppRoutes.adminDashboard,
+      _ => AppRoutes.login,
+    };
   }
 
   @override
@@ -71,7 +104,6 @@ class _SplashScreenState extends State<SplashScreen>
         body: Stack(
           fit: StackFit.expand,
           children: [
-
             // ── TOP-LEFT BLOB ──────────────────────────────────────────────
             // Large pale-green circle peeking from top-left corner
             Positioned(
@@ -139,7 +171,6 @@ class _SplashScreenState extends State<SplashScreen>
     );
   }
 }
-
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Accent blob (circle)

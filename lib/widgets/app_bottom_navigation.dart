@@ -51,12 +51,18 @@ class AppBottomNavigation extends StatelessWidget {
           ),
           const BottomNavigationBarItem(
             icon: Badge(
-              label: Text('12', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+              label: Text(
+                '12',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
               backgroundColor: Color(0xFFDC2626),
               child: Icon(Icons.assignment_outlined),
             ),
             activeIcon: Badge(
-              label: Text('12', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700)),
+              label: Text(
+                '12',
+                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
+              ),
               backgroundColor: Color(0xFFDC2626),
               child: Icon(Icons.assignment_rounded),
             ),
@@ -124,7 +130,9 @@ class AppBottomNavigation extends StatelessWidget {
     final navBg = isDark ? const Color(0xFF1E293B) : Colors.white;
     final borderColor = isDark ? const Color(0xFF334155) : AppColors.border;
     final selectedColor = isDark ? const Color(0xFF34D399) : AppColors.primary;
-    final unselectedColor = isDark ? const Color(0xFF64748B) : AppColors.textHint;
+    final unselectedColor = isDark
+        ? const Color(0xFF64748B)
+        : AppColors.textHint;
 
     return Container(
       decoration: BoxDecoration(

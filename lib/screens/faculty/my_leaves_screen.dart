@@ -4,20 +4,86 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/leave_application_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class MyLeavesScreen extends StatefulWidget {
-  const MyLeavesScreen({super.key});
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
+
+  const MyLeavesScreen({
+    super.key,
+    this.leaveRepository,
+    this.authRepository,
+  });
 
   @override
   State<MyLeavesScreen> createState() => _MyLeavesScreenState();
 }
 
 class _MyLeavesScreenState extends State<MyLeavesScreen> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
   int _selectedFilterIndex = 0; // 0: All, 1: Pending, 2: Approved, 3: Rejected
   int _currentNavIndex = 1; // 1: My Leaves tab active
+  bool _isLoading = false;
+  bool _hasFetchedReal = false;
+  List<Map<String, dynamic>> _realLeaves = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchRealLeaves();
+  }
+
+  Future<void> _fetchRealLeaves() async {
+    final uid = _authRepo.currentUserId ?? AuthRepository.activeUser?.uid;
+    if (uid == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final apps = await _leaveRepo.myApplications(uid);
+      if (mounted) {
+        setState(() {
+          _realLeaves = apps.map(_mapApplicationToItem).toList();
+          _hasFetchedReal = true;
+          _isLoading = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Map<String, dynamic> _mapApplicationToItem(LeaveApplicationModel app) {
+    final startStr = DateFormat('MMM dd').format(app.startDate);
+    final endStr = DateFormat('MMM dd, yyyy').format(app.endDate);
+    final statusDisplay = switch (app.status.toLowerCase()) {
+      'approved' => 'Approved',
+      'rejected' => 'Rejected',
+      'forwarded' => 'Forwarded',
+      _ => 'Pending',
+    };
+    return {
+      'id': app.id,
+      'title': app.leaveTypeName,
+      'code': app.leaveTypeId.toUpperCase(),
+      'dateRange': '$startStr – $endStr',
+      'duration': '${app.totalDays} Day${app.totalDays > 1 ? 's' : ''}',
+      'status': statusDisplay,
+      'reason': app.reason,
+      'appliedOn':
+          'Applied ${DateFormat('MMM dd, yyyy').format(app.appliedAt)}',
+      'model': app,
+    };
+  }
 
   final List<Map<String, dynamic>> _allLeaves = const [
     {
@@ -67,16 +133,22 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
     },
   ];
 
+  List<Map<String, dynamic>> get _currentList =>
+      _hasFetchedReal ? _realLeaves : _allLeaves;
+
   List<Map<String, dynamic>> get _filteredLeaves {
+    final list = _currentList;
     switch (_selectedFilterIndex) {
       case 1:
-        return _allLeaves.where((l) => l['status'] == 'Pending').toList();
+        return list
+            .where((l) => l['status'] == 'Pending' || l['status'] == 'Forwarded')
+            .toList();
       case 2:
-        return _allLeaves.where((l) => l['status'] == 'Approved').toList();
+        return list.where((l) => l['status'] == 'Approved').toList();
       case 3:
-        return _allLeaves.where((l) => l['status'] == 'Rejected').toList();
+        return list.where((l) => l['status'] == 'Rejected').toList();
       default:
-        return _allLeaves;
+        return list;
     }
   }
 
@@ -107,17 +179,29 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFB);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFB);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary = isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final primaryColor = isDark ? const Color(0xFF34D399) : const Color(0xFF1B4332);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final primaryColor = isDark
+            ? const Color(0xFF34D399)
+            : const Color(0xFF1B4332);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -166,7 +250,10 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     physics: const BouncingScrollPhysics(),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 8,
+                    ),
                     child: Row(
                       children: [
                         _FilterChip(
@@ -177,21 +264,24 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
-                          label: 'Pending (${_allLeaves.where((l) => l['status'] == 'Pending').length})',
+                          label:
+                              'Pending (${_allLeaves.where((l) => l['status'] == 'Pending').length})',
                           isSelected: _selectedFilterIndex == 1,
                           isDark: isDark,
                           onTap: () => setState(() => _selectedFilterIndex = 1),
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
-                          label: 'Approved (${_allLeaves.where((l) => l['status'] == 'Approved').length})',
+                          label:
+                              'Approved (${_allLeaves.where((l) => l['status'] == 'Approved').length})',
                           isSelected: _selectedFilterIndex == 2,
                           isDark: isDark,
                           onTap: () => setState(() => _selectedFilterIndex = 2),
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
-                          label: 'Rejected (${_allLeaves.where((l) => l['status'] == 'Rejected').length})',
+                          label:
+                              'Rejected (${_allLeaves.where((l) => l['status'] == 'Rejected').length})',
                           isSelected: _selectedFilterIndex == 3,
                           isDark: isDark,
                           onTap: () => setState(() => _selectedFilterIndex = 3),
@@ -204,10 +294,12 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
 
                   // ── LEAVES LIST ────────────────────────────────────────────────
                   Expanded(
-                    child: filteredList.isEmpty
-                        ? Center(
-                            child: Text(
-                              'No leave applications found',
+                    child: _isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : filteredList.isEmpty
+                            ? Center(
+                                child: Text(
+                                  'No leave applications found',
                               style: TextStyle(
                                 fontSize: 13.5,
                                 fontWeight: FontWeight.w500,
@@ -216,10 +308,14 @@ class _MyLeavesScreenState extends State<MyLeavesScreen> {
                             ),
                           )
                         : ListView.separated(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 20,
+                              vertical: 12,
+                            ),
                             physics: const BouncingScrollPhysics(),
                             itemCount: filteredList.length,
-                            separatorBuilder: (context, index) => const SizedBox(height: 12),
+                            separatorBuilder: (context, index) =>
+                                const SizedBox(height: 12),
                             itemBuilder: (context, index) {
                               final item = filteredList[index];
                               return _LeaveHistoryCard(
@@ -266,9 +362,13 @@ class _FilterChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final activeBg = isDark ? const Color(0xFF0D9488) : const Color(0xFF042F2C);
     final inactiveBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-    final inactiveBorder = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final inactiveBorder = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
     final activeText = Colors.white;
-    final inactiveText = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+    final inactiveText = isDark
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
 
     return GestureDetector(
       onTap: onTap,
@@ -277,9 +377,7 @@ class _FilterChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: isSelected ? activeBg : inactiveBg,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected ? activeBg : inactiveBorder,
-          ),
+          border: Border.all(color: isSelected ? activeBg : inactiveBorder),
         ),
         child: Text(
           label,
@@ -339,13 +437,23 @@ class _LeaveHistoryCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final status = item['status'] as String;
 
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: cardBg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor),
-      ),
+    return GestureDetector(
+      onTap: () {
+        if (item.containsKey('model')) {
+          Navigator.pushNamed(
+            context,
+            AppRoutes.leaveDetails,
+            arguments: item['model'],
+          );
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: borderColor),
+        ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -355,9 +463,14 @@ class _LeaveHistoryCard extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+                      color: isDark
+                          ? const Color(0xFF334155)
+                          : const Color(0xFFF1F5F9),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
@@ -381,7 +494,10 @@ class _LeaveHistoryCard extends StatelessWidget {
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: _getStatusBg(status),
                   borderRadius: BorderRadius.circular(6),
@@ -407,7 +523,10 @@ class _LeaveHistoryCard extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Divider(height: 1, color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9)),
+          Divider(
+            height: 1,
+            color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
+          ),
           const SizedBox(height: 10),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -442,6 +561,7 @@ class _LeaveHistoryCard extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ),
+  );
   }
 }

@@ -22,6 +22,7 @@ class LeaveBalanceModel {
   });
 
   int get remaining => totalAllotted - used;
+  int get remainingDays => remaining;
 
   factory LeaveBalanceModel.fromMap(Map<String, dynamic> map) {
     return LeaveBalanceModel(

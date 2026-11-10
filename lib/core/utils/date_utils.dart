@@ -64,8 +64,10 @@ class LeaveDateUtils {
 
   /// Returns true if two date ranges overlap.
   static bool rangesOverlap(
-    DateTime s1, DateTime e1,
-    DateTime s2, DateTime e2,
+    DateTime s1,
+    DateTime e1,
+    DateTime s2,
+    DateTime e2,
   ) =>
       s1.isBefore(e2.add(const Duration(days: 1))) &&
       e1.isAfter(s2.subtract(const Duration(days: 1)));

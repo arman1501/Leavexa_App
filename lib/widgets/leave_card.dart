@@ -13,19 +13,19 @@ class LeaveCard extends StatelessWidget {
   final LeaveApplicationModel application;
   final VoidCallback? onTap;
 
-  const LeaveCard({
-    super.key,
-    required this.application,
-    this.onTap,
-  });
+  const LeaveCard({super.key, required this.application, this.onTap});
 
   @override
   Widget build(BuildContext context) {
     final isDark = AppThemeState.instance.isDarkMode;
     final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
     final borderColor = isDark ? const Color(0xFF334155) : AppColors.border;
-    final textPrimary = isDark ? const Color(0xFFF8FAFC) : AppColors.textPrimary;
-    final textSecondary = isDark ? const Color(0xFF94A3B8) : AppColors.textSecondary;
+    final textPrimary = isDark
+        ? const Color(0xFFF8FAFC)
+        : AppColors.textPrimary;
+    final textSecondary = isDark
+        ? const Color(0xFF94A3B8)
+        : AppColors.textSecondary;
     final textHint = isDark ? const Color(0xFF64748B) : AppColors.textHint;
     final primaryColor = isDark ? const Color(0xFF34D399) : AppColors.primary;
 
@@ -72,10 +72,7 @@ class LeaveCard extends StatelessWidget {
                 Text(
                   '${LeaveDateUtils.formatDisplay(application.startDate)} '
                   '– ${LeaveDateUtils.formatDisplay(application.endDate)}',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: textSecondary,
-                  ),
+                  style: TextStyle(fontSize: 13, color: textSecondary),
                 ),
                 const Spacer(),
                 Text(
@@ -96,11 +93,7 @@ class LeaveCard extends StatelessWidget {
               application.reason,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 13,
-                color: textSecondary,
-                height: 1.4,
-              ),
+              style: TextStyle(fontSize: 13, color: textSecondary, height: 1.4),
             ),
 
             const SizedBox(height: 10),
@@ -108,10 +101,7 @@ class LeaveCard extends StatelessWidget {
             // ── Footer ──────────────────────────────────────────────────────
             Text(
               'Applied ${LeaveDateUtils.timeAgo(application.appliedAt)}',
-              style: TextStyle(
-                fontSize: 11.5,
-                color: textHint,
-              ),
+              style: TextStyle(fontSize: 11.5, color: textHint),
             ),
           ],
         ),

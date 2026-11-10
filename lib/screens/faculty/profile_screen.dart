@@ -8,6 +8,7 @@ import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
 import '../../models/faculty_profile_state.dart';
+import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -50,19 +51,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFB);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFB);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary = isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final dividerColor = isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
-        final surfaceAlt = isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
-        final primaryColor = isDark ? const Color(0xFF34D399) : const Color(0xFF1B4332);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final dividerColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
+        final surfaceAlt = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
+        final primaryColor = isDark
+            ? const Color(0xFF34D399)
+            : const Color(0xFF1B4332);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -77,13 +94,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       builder: (context, profileData, child) {
                         return SingleChildScrollView(
                           physics: const ClampingScrollPhysics(),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 14,
+                          ),
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               // ── 1. TOP HEADER ──────────────────────────────────────
                               Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
                                 children: [
                                   Text(
                                     'Profile Faculty',
@@ -95,7 +116,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     ),
                                   ),
                                   GestureDetector(
-                                    onTap: () => Navigator.pushNamed(context, AppRoutes.settings),
+                                    onTap: () => Navigator.pushNamed(
+                                      context,
+                                      AppRoutes.settings,
+                                    ),
                                     child: Container(
                                       width: 38,
                                       height: 38,
@@ -152,7 +176,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   border: Border.all(color: borderColor),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: isDark ? const Color(0x33000000) : const Color(0x05000000),
+                                      color: isDark
+                                          ? const Color(0x33000000)
+                                          : const Color(0x05000000),
                                       blurRadius: 10,
                                       offset: const Offset(0, 3),
                                     ),
@@ -161,21 +187,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 child: Column(
                                   children: [
                                     Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         // Avatar with online dot
                                         Stack(
                                           children: [
-                                            Container(
-                                              width: 68,
-                                              height: 68,
-                                              decoration: const BoxDecoration(
-                                                shape: BoxShape.circle,
-                                                image: DecorationImage(
-                                                  image: AssetImage('assets/images/profile.jpg'),
-                                                  fit: BoxFit.cover,
-                                                ),
-                                              ),
+                                            AppAvatar(
+                                              name: profileData.fullName,
+                                              photoUrl: profileData.photoUrl,
+                                              size: 68,
                                             ),
                                             Positioned(
                                               bottom: 2,
@@ -184,10 +205,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                                 width: 14,
                                                 height: 14,
                                                 decoration: BoxDecoration(
-                                                  color: const Color(0xFF16A34A),
+                                                  color: const Color(
+                                                    0xFF16A34A,
+                                                  ),
                                                   shape: BoxShape.circle,
                                                   border: Border.all(
-                                                    color: isDark ? const Color(0xFF1E293B) : Colors.white,
+                                                    color: isDark
+                                                        ? const Color(
+                                                            0xFF1E293B,
+                                                          )
+                                                        : Colors.white,
                                                     width: 2,
                                                   ),
                                                 ),
@@ -199,7 +226,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                         // Name & Details
                                         Expanded(
                                           child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
                                             children: [
                                               Text(
                                                 profileData.fullName,
@@ -232,10 +260,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                               ),
                                               const SizedBox(height: 8),
                                               Container(
-                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 8,
+                                                      vertical: 3,
+                                                    ),
                                                 decoration: BoxDecoration(
-                                                  color: isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7),
-                                                  borderRadius: BorderRadius.circular(6),
+                                                  color: isDark
+                                                      ? const Color(0xFF064E3B)
+                                                      : const Color(0xFFDCFCE7),
+                                                  borderRadius:
+                                                      BorderRadius.circular(6),
                                                 ),
                                                 child: Text(
                                                   'ID: #${profileData.employeeId}',
@@ -254,16 +289,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                     const SizedBox(height: 16),
                                     // Edit Profile Button
                                     GestureDetector(
-                                      onTap: () => Navigator.pushNamed(context, AppRoutes.editProfile),
+                                      onTap: () => Navigator.pushNamed(
+                                        context,
+                                        AppRoutes.editProfile,
+                                      ),
                                       child: Container(
                                         width: double.infinity,
                                         height: 44,
                                         decoration: BoxDecoration(
                                           color: surfaceAlt,
-                                          borderRadius: BorderRadius.circular(12),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
                                         ),
                                         child: Row(
-                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
                                           children: [
                                             Icon(
                                               Icons.edit_outlined,
@@ -309,7 +350,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   border: Border.all(color: borderColor),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: isDark ? const Color(0x33000000) : const Color(0x05000000),
+                                      color: isDark
+                                          ? const Color(0x33000000)
+                                          : const Color(0x05000000),
                                       blurRadius: 10,
                                       offset: const Offset(0, 3),
                                     ),
@@ -493,11 +536,7 @@ class _InfoTile extends StatelessWidget {
               color: surfaceAlt,
               borderRadius: BorderRadius.circular(10),
             ),
-            child: Icon(
-              icon,
-              color: textSecondary,
-              size: 18,
-            ),
+            child: Icon(icon, color: textSecondary, size: 18),
           ),
           const SizedBox(width: 12),
           Expanded(

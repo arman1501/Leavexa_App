@@ -12,5 +12,7 @@ import 'package:leavexa/app.dart';
 void main() {
   testWidgets('App smoke test', (WidgetTester tester) async {
     await tester.pumpWidget(const LeavexaApp());
+    // Settle SplashScreen's 1.5s auto-navigation timer to avoid pending timer exception.
+    await tester.pumpAndSettle();
   });
 }

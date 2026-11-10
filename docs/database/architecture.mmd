@@ -1,0 +1,124 @@
+erDiagram
+    users ||--o{ leave_applications : "submits"
+    users ||--o{ leave_balances : "owns"
+    users ||--o{ notifications : "receives"
+    users ||--|| employee_ids : "reserves"
+    departments ||--o{ users : "employs"
+    departments ||--o| users : "headed_by"
+    leave_types ||--o{ leave_applications : "categorizes"
+    leave_types ||--o{ leave_balances : "allots"
+    leave_applications ||--o{ notifications : "triggers"
+    leave_applications ||--o{ audit_logs : "records"
+    users ||--o{ audit_logs : "initiates"
+
+    users {
+        string uid PK "Firebase Auth UID"
+        string fullName "Legal Name"
+        string email "Institutional Email"
+        string employeeId FK "Employee ID"
+        string departmentId FK "Department Slug"
+        string departmentName "Denormalized Department Name"
+        string designation "Academic Rank"
+        string role "faculty | department_head | registrar | admin"
+        string phone "Contact Number"
+        string photoUrl "Storage URL"
+        boolean isActive "Active toggle"
+        string approvalStatus "pending | approved | rejected"
+        timestamp createdAt "Profile creation"
+        timestamp approvedAt "Approval time"
+        string approvedBy FK "Admin UID"
+    }
+
+    employee_ids {
+        string employeeId PK "Normalized ID e.g. FAC-1024"
+        string uid FK "Owner Auth UID"
+        timestamp createdAt "Reservation timestamp"
+    }
+
+    leave_applications {
+        string id PK "Unique Application ID"
+        string applicantUid FK "Submitting Faculty UID"
+        string applicantName "Denormalized Faculty Name"
+        string applicantEmployeeId "Denormalized Employee ID"
+        string departmentId FK "Department ID"
+        string departmentName "Denormalized Department Name"
+        string leaveTypeId FK "Leave Type ID"
+        string leaveTypeName "Denormalized Type Name"
+        string startDate "ISO-8601 Date"
+        string endDate "ISO-8601 Date"
+        int totalDays "Requested Business Days"
+        string reason "Applicant justification"
+        string documentUrl "Firebase Storage URL"
+        string status "pending | forwarded | approved | rejected | draft | cancelled"
+        string headComment "Department Head Notes"
+        string headActionAt "Head Action Time"
+        string headUid FK "Head Reviewer UID"
+        string registrarComment "Registrar Notes"
+        string registrarActionAt "Registrar Action Time"
+        string registrarUid FK "Registrar Reviewer UID"
+        string appliedAt "Application Timestamp"
+        boolean balanceDeducted "Server deduction flag"
+        timestamp balanceDeductedAt "Server deduction time"
+    }
+
+    leave_balances {
+        string id PK "userUid_leaveTypeId_year"
+        string userUid FK "Faculty Member UID"
+        string leaveTypeId FK "Leave Type Slug"
+        string leaveTypeName "Denormalized Type Name"
+        int totalAllotted "Annual Quota"
+        int used "Consumed Days"
+        int year "Academic Year e.g. 2026"
+        string departmentId FK "Department Slug"
+        timestamp createdAt "Creation time"
+        timestamp updatedAt "Last deduction time"
+    }
+
+    notifications {
+        string id PK "Unique Notification ID"
+        string recipientUid FK "Target User UID"
+        string title "Notification Title"
+        string body "Message Content"
+        string type "leave_applied | leave_approved | ..."
+        string relatedApplicationId FK "Linked Application ID"
+        boolean isRead "Read Receipt"
+        string createdAt "Creation timestamp"
+    }
+
+    departments {
+        string id PK "Canonical Slug e.g. dept_cse"
+        string name "Department Name"
+        string shortCode "Abbreviation e.g. CSE"
+        string headUid FK "Assigned Head UID"
+        boolean isActive "Department active flag"
+    }
+
+    leave_types {
+        string id PK "Canonical Slug e.g. casual_leave"
+        string name "Type Name e.g. Casual Leave"
+        string code "Short Code e.g. CL"
+        int defaultDays "Default annual quota"
+        boolean requiresDocument "Attachment requirement"
+        boolean isActive "Active policy toggle"
+    }
+
+    audit_logs {
+        string id PK "Auto-generated Log ID"
+        string actorUid FK "Actor UID or system"
+        string actorRole "admin | registrar | head | system"
+        string action "Standard Action Verb"
+        string targetType "user | leave_application | ..."
+        string targetId "Target Document ID"
+        string relatedApplicationId FK "Optional Linked App ID"
+        map details "JSON Metadata Payload"
+        timestamp timestamp "Server Timestamp"
+    }
+
+    system_config {
+        string configId PK "Singleton Key e.g. bootstrap"
+        boolean isBootstrapped "Bootstrap Mutex Flag"
+        timestamp bootstrappedAt "Bootstrap Time"
+        string bootstrappedBy FK "Initial Admin UID"
+        string adminEmail "Initial Admin Email"
+        string note "Administrative Notes"
+    }

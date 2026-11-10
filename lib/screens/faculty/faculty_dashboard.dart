@@ -4,22 +4,97 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
 import '../../models/faculty_profile_state.dart';
+import '../../models/leave_application_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
+import '../../services/notification_service.dart';
+import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class FacultyDashboard extends StatefulWidget {
-  const FacultyDashboard({super.key});
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
+  final NotificationService? notificationService;
+
+  const FacultyDashboard({
+    super.key,
+    this.leaveRepository,
+    this.authRepository,
+    this.notificationService,
+  });
 
   @override
   State<FacultyDashboard> createState() => _FacultyDashboardState();
 }
 
 class _FacultyDashboardState extends State<FacultyDashboard> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+  late final NotificationService _notifService =
+      widget.notificationService ?? NotificationService();
+
   int _currentNavIndex = 0;
+  bool _hasFetchedReal = false;
+  int _unreadNotifCount = 0;
+  List<LeaveApplicationModel> _realRecentLeaves = [];
+  final Map<String, ({int remaining, int total, int used})> _realBalances = {
+    'Casual': (remaining: 10, total: 10, used: 0),
+    'Medical': (remaining: 14, total: 14, used: 0),
+    'Earned': (remaining: 30, total: 30, used: 0),
+    'Duty': (remaining: 15, total: 15, used: 0),
+    'Station': (remaining: 5, total: 5, used: 0),
+    'Study': (remaining: 30, total: 30, used: 0),
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRealData();
+  }
+
+  Future<void> _loadRealData() async {
+    try {
+      final user = await _authRepo.getCurrentUserProfile();
+      final uid = user?.uid ?? _authRepo.currentUserId;
+      if (uid == null) return;
+
+      final balances = await _leaveRepo.balancesForUser(uid);
+      final apps = await _leaveRepo.myApplications(uid);
+      final notifs = await _notifService.getForUser(uid);
+
+      if (mounted) {
+        setState(() {
+          _hasFetchedReal = true;
+          _unreadNotifCount = notifs.where((n) => !n.isRead).length;
+          _realRecentLeaves = apps;
+          for (final b in balances) {
+            String key = b.leaveTypeName.split(' ').first;
+            if (key.toLowerCase() == 'sick' ||
+                b.leaveTypeId == 'sick' ||
+                b.leaveTypeId == 'medical') {
+              key = 'Medical';
+            }
+            if (_realBalances.containsKey(key)) {
+              final rem = b.remainingDays < 0 ? 0 : b.remainingDays;
+              _realBalances[key] = (
+                remaining: rem,
+                total: b.totalAllotted,
+                used: b.used,
+              );
+            }
+          }
+        });
+      }
+    } catch (_) {}
+  }
 
   void _onBottomNavTap(int index) {
     if (index == _currentNavIndex) return;
@@ -46,19 +121,35 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFB);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFB);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary = isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final textHint = isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8);
-        final primaryColor = isDark ? const Color(0xFF0D9488) : AppColors.primary;
-        final dividerColor = isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final textHint = isDark
+            ? const Color(0xFF64748B)
+            : const Color(0xFF94A3B8);
+        final primaryColor = isDark
+            ? const Color(0xFF0D9488)
+            : AppColors.primary;
+        final dividerColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -66,7 +157,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
             body: SafeArea(
               child: SingleChildScrollView(
                 physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 16,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -74,28 +168,30 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                     Row(
                       children: [
                         // Profile Avatar (Tappable -> Faculty Profile)
-                        GestureDetector(
-                          onTap: () => Navigator.pushReplacementNamed(
-                            context,
-                            AppRoutes.profile,
-                          ),
-                          child: Container(
-                            width: 44,
-                            height: 44,
-                            decoration: const BoxDecoration(
-                              shape: BoxShape.circle,
-                              image: DecorationImage(
-                                image: AssetImage('assets/images/profile.jpg'),
-                                fit: BoxFit.cover,
+                        ValueListenableBuilder<FacultyProfileData>(
+                          valueListenable:
+                              FacultyProfileState.instance.notifier,
+                          builder: (context, profileData, _) {
+                            return GestureDetector(
+                              key: const Key('faculty_dashboard_avatar'),
+                              onTap: () => Navigator.pushReplacementNamed(
+                                context,
+                                AppRoutes.profile,
                               ),
-                            ),
-                          ),
+                              child: AppAvatar(
+                                name: profileData.fullName,
+                                photoUrl: profileData.photoUrl,
+                                size: 44,
+                              ),
+                            );
+                          },
                         ),
                         const SizedBox(width: 12),
                         // Name & Designation (Synced with Faculty Profile State)
                         Expanded(
                           child: ValueListenableBuilder<FacultyProfileData>(
-                            valueListenable: FacultyProfileState.instance.notifier,
+                            valueListenable:
+                                FacultyProfileState.instance.notifier,
                             builder: (context, profileData, _) {
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -125,7 +221,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         ),
                         // Notification Button
                         GestureDetector(
-                          onTap: () => Navigator.pushNamed(context, AppRoutes.notifications),
+                          onTap: () => Navigator.pushNamed(
+                            context,
+                            AppRoutes.notifications,
+                          ),
                           child: Container(
                             width: 40,
                             height: 40,
@@ -142,18 +241,19 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                                   size: 20,
                                   color: textSecondary,
                                 ),
-                                Positioned(
-                                  top: 9,
-                                  right: 9,
-                                  child: Container(
-                                    width: 7,
-                                    height: 7,
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF16A34A),
-                                      shape: BoxShape.circle,
+                                if (!_hasFetchedReal || _unreadNotifCount > 0)
+                                  Positioned(
+                                    top: 9,
+                                    right: 9,
+                                    child: Container(
+                                      width: 7,
+                                      height: 7,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0xFF16A34A),
+                                        shape: BoxShape.circle,
+                                      ),
                                     ),
                                   ),
-                                ),
                               ],
                             ),
                           ),
@@ -165,7 +265,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
 
                     // ── 2. PRIMARY ACTION (APPLY FOR LEAVE) ──────────────────────
                     GestureDetector(
-                      onTap: () => Navigator.pushNamed(context, AppRoutes.applyLeave),
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        AppRoutes.applyLeave,
+                      ).then((_) => _loadRealData()),
                       child: Container(
                         width: double.infinity,
                         height: 50,
@@ -183,7 +286,11 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.add_rounded, color: Colors.white, size: 20),
+                            Icon(
+                              Icons.add_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
                             SizedBox(width: 8),
                             Text(
                               'Apply for Leave',
@@ -232,74 +339,64 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                       physics: const BouncingScrollPhysics(),
                       child: Row(
                         children: [
-                          SizedBox(
-                            width: 124,
-                            child: _LeaveBalanceCard(
-                              title: 'Casual Leave',
-                              count: '6',
-                              progress: 0.4,
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textPrimary: textPrimary,
-                              textSecondary: textSecondary,
-                              progressColor: primaryColor,
-                            ),
+                          _buildBalanceCard(
+                            title: 'Casual Leave',
+                            typeKey: 'Casual',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
                           ),
                           const SizedBox(width: 10),
-                          SizedBox(
-                            width: 124,
-                            child: _LeaveBalanceCard(
-                              title: 'Duty Leave',
-                              count: '4',
-                              progress: 0.3,
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textPrimary: textPrimary,
-                              textSecondary: textSecondary,
-                              progressColor: primaryColor,
-                            ),
+                          _buildBalanceCard(
+                            title: 'Medical Leave',
+                            typeKey: 'Medical',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
                           ),
                           const SizedBox(width: 10),
-                          SizedBox(
-                            width: 124,
-                            child: _LeaveBalanceCard(
-                              title: 'Station Leave',
-                              count: '2',
-                              progress: 0.2,
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textPrimary: textPrimary,
-                              textSecondary: textSecondary,
-                              progressColor: primaryColor,
-                            ),
+                          _buildBalanceCard(
+                            title: 'Earned Leave',
+                            typeKey: 'Earned',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
                           ),
                           const SizedBox(width: 10),
-                          SizedBox(
-                            width: 124,
-                            child: _LeaveBalanceCard(
-                              title: 'Study Leave',
-                              count: '15',
-                              progress: 0.8,
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textPrimary: textPrimary,
-                              textSecondary: textSecondary,
-                              progressColor: primaryColor,
-                            ),
+                          _buildBalanceCard(
+                            title: 'Duty Leave',
+                            typeKey: 'Duty',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
                           ),
                           const SizedBox(width: 10),
-                          SizedBox(
-                            width: 124,
-                            child: _LeaveBalanceCard(
-                              title: 'Others',
-                              count: '5',
-                              progress: 0.5,
-                              cardBg: cardBg,
-                              borderColor: borderColor,
-                              textPrimary: textPrimary,
-                              textSecondary: textSecondary,
-                              progressColor: primaryColor,
-                            ),
+                          _buildBalanceCard(
+                            title: 'Station Leave',
+                            typeKey: 'Station',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildBalanceCard(
+                            title: 'Study Leave',
+                            typeKey: 'Study',
+                            cardBg: cardBg,
+                            borderColor: borderColor,
+                            textPrimary: textPrimary,
+                            textSecondary: textSecondary,
+                            primaryColor: primaryColor,
                           ),
                         ],
                       ),
@@ -321,7 +418,8 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                           ),
                         ),
                         GestureDetector(
-                          onTap: () => Navigator.pushNamed(context, AppRoutes.myLeaves),
+                          onTap: () =>
+                              Navigator.pushNamed(context, AppRoutes.myLeaves),
                           child: const Text(
                             'View all',
                             style: TextStyle(
@@ -342,49 +440,112 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: borderColor),
                       ),
-                      child: Column(
-                        children: [
-                          _RecentLeaveTile(
-                            title: 'Casual Leave',
-                            dateRange: 'Sep 18 – Sep 20',
-                            status: 'Pending',
-                            statusBg: isDark ? const Color(0xFF451A03) : const Color(0xFFFEF3C7),
-                            statusColor: const Color(0xFFD97706),
-                            textPrimary: textPrimary,
-                            textHint: textHint,
-                          ),
-                          Divider(height: 1, color: dividerColor),
-                          _RecentLeaveTile(
-                            title: 'Duty Leave',
-                            dateRange: 'Sep 22 – Sep 24',
-                            status: 'Approved',
-                            statusBg: isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7),
-                            statusColor: const Color(0xFF16A34A),
-                            textPrimary: textPrimary,
-                            textHint: textHint,
-                          ),
-                          Divider(height: 1, color: dividerColor),
-                          _RecentLeaveTile(
-                            title: 'Station Leave',
-                            dateRange: 'Oct 01 – Oct 03',
-                            status: 'Approved',
-                            statusBg: isDark ? const Color(0xFF064E3B) : const Color(0xFFDCFCE7),
-                            statusColor: const Color(0xFF16A34A),
-                            textPrimary: textPrimary,
-                            textHint: textHint,
-                          ),
-                          Divider(height: 1, color: dividerColor),
-                          _RecentLeaveTile(
-                            title: 'Study Leave',
-                            dateRange: 'Oct 10 – Oct 15',
-                            status: 'Rejected',
-                            statusBg: isDark ? const Color(0xFF451A1A) : const Color(0xFFFEE2E2),
-                            statusColor: const Color(0xFFDC2626),
-                            textPrimary: textPrimary,
-                            textHint: textHint,
-                          ),
-                        ],
-                      ),
+                      child: _hasFetchedReal && _realRecentLeaves.isNotEmpty
+                          ? Column(
+                              children: _realRecentLeaves.take(4).map((app) {
+                                final isLast =
+                                    app == _realRecentLeaves.take(4).last;
+                                final status = app.status;
+                                final statusBg = switch (status.toLowerCase()) {
+                                  'approved' => isDark
+                                      ? const Color(0xFF064E3B)
+                                      : const Color(0xFFDCFCE7),
+                                  'rejected' => isDark
+                                      ? const Color(0xFF451A1A)
+                                      : const Color(0xFFFEE2E2),
+                                  'forwarded' => isDark
+                                      ? const Color(0xFF1E3A8A)
+                                      : const Color(0xFFDBEAFE),
+                                  _ => isDark
+                                      ? const Color(0xFF451A03)
+                                      : const Color(0xFFFEF3C7),
+                                };
+                                final statusColor = switch (
+                                    status.toLowerCase()) {
+                                  'approved' => const Color(0xFF16A34A),
+                                  'rejected' => const Color(0xFFDC2626),
+                                  'forwarded' => const Color(0xFF2563EB),
+                                  _ => const Color(0xFFD97706),
+                                };
+                                final dateStr =
+                                    '${DateFormat('MMM dd').format(app.startDate)} – ${DateFormat('MMM dd').format(app.endDate)}';
+
+                                return Column(
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () => Navigator.pushNamed(
+                                        context,
+                                        AppRoutes.leaveDetails,
+                                        arguments: app,
+                                      ),
+                                      child: _RecentLeaveTile(
+                                        title: app.leaveTypeName,
+                                        dateRange: dateStr,
+                                        status: status[0].toUpperCase() +
+                                            status.substring(1),
+                                        statusBg: statusBg,
+                                        statusColor: statusColor,
+                                        textPrimary: textPrimary,
+                                        textHint: textHint,
+                                      ),
+                                    ),
+                                    if (!isLast)
+                                      Divider(height: 1, color: dividerColor),
+                                  ],
+                                );
+                              }).toList(),
+                            )
+                          : Column(
+                              children: [
+                                _RecentLeaveTile(
+                                  title: 'Casual Leave',
+                                  dateRange: 'Sep 18 – Sep 20',
+                                  status: 'Pending',
+                                  statusBg: isDark
+                                      ? const Color(0xFF451A03)
+                                      : const Color(0xFFFEF3C7),
+                                  statusColor: const Color(0xFFD97706),
+                                  textPrimary: textPrimary,
+                                  textHint: textHint,
+                                ),
+                                Divider(height: 1, color: dividerColor),
+                                _RecentLeaveTile(
+                                  title: 'Duty Leave',
+                                  dateRange: 'Sep 22 – Sep 24',
+                                  status: 'Approved',
+                                  statusBg: isDark
+                                      ? const Color(0xFF064E3B)
+                                      : const Color(0xFFDCFCE7),
+                                  statusColor: const Color(0xFF16A34A),
+                                  textPrimary: textPrimary,
+                                  textHint: textHint,
+                                ),
+                                Divider(height: 1, color: dividerColor),
+                                _RecentLeaveTile(
+                                  title: 'Station Leave',
+                                  dateRange: 'Oct 01 – Oct 03',
+                                  status: 'Approved',
+                                  statusBg: isDark
+                                      ? const Color(0xFF064E3B)
+                                      : const Color(0xFFDCFCE7),
+                                  statusColor: const Color(0xFF16A34A),
+                                  textPrimary: textPrimary,
+                                  textHint: textHint,
+                                ),
+                                Divider(height: 1, color: dividerColor),
+                                _RecentLeaveTile(
+                                  title: 'Study Leave',
+                                  dateRange: 'Oct 10 – Oct 15',
+                                  status: 'Rejected',
+                                  statusBg: isDark
+                                      ? const Color(0xFF451A1A)
+                                      : const Color(0xFFFEE2E2),
+                                  statusColor: const Color(0xFFDC2626),
+                                  textPrimary: textPrimary,
+                                  textHint: textHint,
+                                ),
+                              ],
+                            ),
                     ),
 
                     const SizedBox(height: 24),
@@ -414,7 +575,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             iconColor: primaryColor,
-                            onTap: () => Navigator.pushNamed(context, AppRoutes.myLeaves),
+                            onTap: () => Navigator.pushNamed(
+                              context,
+                              AppRoutes.myLeaves,
+                            ),
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -428,7 +592,10 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             iconColor: primaryColor,
-                            onTap: () => Navigator.pushNamed(context, AppRoutes.deptCalendar),
+                            onTap: () => Navigator.pushNamed(
+                              context,
+                              AppRoutes.deptCalendar,
+                            ),
                           ),
                         ),
                       ],
@@ -449,11 +616,43 @@ class _FacultyDashboardState extends State<FacultyDashboard> {
       },
     );
   }
+
+  Widget _buildBalanceCard({
+    required String title,
+    required String typeKey,
+    required Color cardBg,
+    required Color borderColor,
+    required Color textPrimary,
+    required Color textSecondary,
+    required Color primaryColor,
+  }) {
+    final bal = _realBalances[typeKey] ?? (remaining: 0, total: 0, used: 0);
+    final remaining = bal.remaining < 0 ? 0 : bal.remaining;
+    final progress =
+        bal.total > 0 ? (remaining / bal.total).clamp(0.0, 1.0) : 0.0;
+    final subtitle = '${bal.used} used of ${bal.total}';
+
+    return SizedBox(
+      width: 128,
+      child: _LeaveBalanceCard(
+        title: title,
+        count: remaining.toString(),
+        subtitle: subtitle,
+        progress: progress,
+        cardBg: cardBg,
+        borderColor: borderColor,
+        textPrimary: textPrimary,
+        textSecondary: textSecondary,
+        progressColor: primaryColor,
+      ),
+    );
+  }
 }
 
 class _LeaveBalanceCard extends StatelessWidget {
   final String title;
   final String count;
+  final String? subtitle;
   final double progress;
   final Color cardBg;
   final Color borderColor;
@@ -464,6 +663,7 @@ class _LeaveBalanceCard extends StatelessWidget {
   const _LeaveBalanceCard({
     required this.title,
     required this.count,
+    this.subtitle,
     required this.progress,
     required this.cardBg,
     required this.borderColor,
@@ -495,29 +695,41 @@ class _LeaveBalanceCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: 8),
-          RichText(
-            text: TextSpan(
-              children: [
-                TextSpan(
-                  text: count,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                    color: textPrimary,
-                  ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                count,
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: textPrimary,
                 ),
-                TextSpan(
-                  text: ' days',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
-                    color: textSecondary,
-                  ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'days',
+                style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w500,
+                  color: textSecondary,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
+          if (subtitle != null) ...[
+            const SizedBox(height: 3),
+            Text(
+              subtitle!,
+              style: TextStyle(
+                fontSize: 9.5,
+                fontWeight: FontWeight.w500,
+                color: textSecondary,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(2),
             child: LinearProgressIndicator(

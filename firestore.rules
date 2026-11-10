@@ -1,0 +1,346 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  firestore.rules  –  Leavexa Hardened Security Rules (Phase 8.1 Audit)
+//  Author: Leavexa Security Architecture
+//  Access Model: Role-Based Access Control (RBAC) across:
+//                1. Faculty
+//                2. Department Head
+//                3. Registrar
+//                4. Admin
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  GLOBAL AUTHENTICATION & ROLE HELPERS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function userDocExists() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Role detection:
+    // 1. Checks trusted Firebase Custom Claims first (request.auth.token.role).
+    // 2. Falls back to verified Firestore user document role.
+    function getRole() {
+      return request.auth.token.keys().hasAll(['role'])
+          ? request.auth.token.role
+          : (userDocExists() ? getUserDoc().role : null);
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getRole() == 'admin';
+    }
+
+    function isRegistrar() {
+      return isAuthenticated() && (getRole() == 'registrar' || isAdmin());
+    }
+
+    function isDeptHead() {
+      return isAuthenticated() && (getRole() == 'department_head' || isAdmin());
+    }
+
+    function isFaculty() {
+      return isAuthenticated() && getRole() == 'faculty';
+    }
+
+    // Faculty accounts must be approved by Admin and active
+    function isApprovedAndActive() {
+      return isAuthenticated() && (
+        isAdmin() ||
+        (userDocExists() &&
+         getUserDoc().approvalStatus == 'approved' &&
+         getUserDoc().isActive == true)
+      );
+    }
+
+    function getUserDepartmentId() {
+      return userDocExists() ? getUserDoc().departmentId : null;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  1. USERS COLLECTION (/users/{uid})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /users/{uid} {
+      // Read access:
+      // - Users can read their own profile.
+      // - Admin and Registrar can read any profile for verifications.
+      // - Department Heads can read profiles in their own department.
+      allow read: if isOwner(uid) ||
+                     isRegistrar() ||
+                     (isDeptHead() && resource.data.departmentId == getUserDepartmentId());
+
+      // Registration:
+      // - Self-registration is restricted strictly to 'faculty', 'pending', and inactive.
+      // - Privilege escalation to 'admin', 'registrar', or 'department_head' is rejected.
+      // - Atomically binds registration to an employee_ids reservation matching this UID
+      //   (either created in the same atomic transaction/batch or already owned by this UID during recovery).
+      allow create: if (isOwner(uid) &&
+                        request.resource.data.role == 'faculty' &&
+                        request.resource.data.approvalStatus == 'pending' &&
+                        request.resource.data.isActive == false &&
+                        request.resource.data.uid == uid &&
+                        (!('email' in request.resource.data) || !(request.resource.data.email in [
+                          'department.head.lu@gmail.com',
+                          'registrar.lu@gmail.com',
+                          'admin.lu@gmail.com'
+                        ])) &&
+                        request.resource.data.employeeId is string &&
+                        request.resource.data.employeeId.size() >= 3 &&
+                        request.resource.data.employeeId.size() <= 30 &&
+                        (
+                          // Option 1: employee_ids doc created in the same transaction/batch
+                          (existsAfter(/databases/$(database)/documents/employee_ids/$(request.resource.data.employeeId)) &&
+                           getAfter(/databases/$(database)/documents/employee_ids/$(request.resource.data.employeeId)).data.uid == uid) ||
+                          // Option 2: employee_ids doc already exists and is owned by this exact UID (recovery)
+                          (exists(/databases/$(database)/documents/employee_ids/$(request.resource.data.employeeId)) &&
+                           get(/databases/$(database)/documents/employee_ids/$(request.resource.data.employeeId)).data.uid == uid)
+                        )) ||
+                       isAdmin();
+
+      // Updates:
+      // - Normal users can only update personal contact details.
+      // - Protected fields (role, approvalStatus, isActive, employeeId, departmentId, email, uid) are strictly immutable.
+      // - Only Admin can approve/reject, activate/deactivate, or modify roles.
+      allow update: if (isOwner(uid) &&
+                        request.resource.data.role == resource.data.role &&
+                        request.resource.data.approvalStatus == resource.data.approvalStatus &&
+                        request.resource.data.isActive == resource.data.isActive &&
+                        request.resource.data.employeeId == resource.data.employeeId &&
+                        request.resource.data.departmentId == resource.data.departmentId &&
+                        request.resource.data.email == resource.data.email &&
+                        request.resource.data.uid == resource.data.uid) ||
+                       isAdmin();
+
+      // Profiles cannot be deleted by standard clients
+      allow delete: if false;
+
+      // ── FCM Device Tokens Subcollection (/users/{uid}/fcm_tokens/{tokenId}) ──
+      match /fcm_tokens/{tokenId} {
+        // Users can register, refresh, read, and delete ONLY their own device tokens
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  2. EMPLOYEE IDS REGISTRY (/employee_ids/{employeeId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /employee_ids/{employeeId} {
+      // Authenticated users can check availability of an Employee ID
+      allow read: if isAuthenticated();
+
+      // Reservation:
+      // - Must not overwrite an already existing reservation.
+      // - User can only reserve for their own UID.
+      // - Cross-document validation: atomically requires a matching user document
+      //   created in the same transaction with this identical employee ID.
+      // - Prevents arbitrary reservation hoarding or mismatching reservations.
+      allow create: if isAuthenticated() &&
+                       request.resource.data.uid == request.auth.uid &&
+                       !exists(/databases/$(database)/documents/employee_ids/$(employeeId)) &&
+                       employeeId is string &&
+                       employeeId.size() >= 3 &&
+                       employeeId.size() <= 30 &&
+                       (isAdmin() ||
+                        (existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                         getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.employeeId == employeeId &&
+                         getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.uid == request.auth.uid));
+
+      // Reservations can only be updated/re-asserted by the owning user during recovery
+      allow update: if isAuthenticated() &&
+                       resource.data.uid == request.auth.uid &&
+                       request.resource.data.uid == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  3. LEAVE APPLICATIONS (/leave_applications/{applicationId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /leave_applications/{applicationId} {
+      // Read access:
+      // - Faculty can read their own applications
+      // - Department Head can read applications for their assigned department
+      // - Registrar and Admin can read all applications
+      allow read: if isApprovedAndActive() && (
+        resource.data.applicantUid == request.auth.uid ||
+        (isDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
+        isRegistrar()
+      );
+
+      // Application Submission:
+      // - Applicant must be active and approved
+      // - Must apply for themselves
+      // - Initial status must be 'pending'
+      // - Department must match applicant's assigned department
+      // - Reviewer/approval fields must be null/empty
+      allow create: if isApprovedAndActive() &&
+                       request.resource.data.applicantUid == request.auth.uid &&
+                       request.resource.data.status == 'pending' &&
+                       request.resource.data.departmentId == getUserDepartmentId() &&
+                       (!('headUid' in request.resource.data) || request.resource.data.headUid == null) &&
+                       (!('headComment' in request.resource.data) || request.resource.data.headComment == null) &&
+                       (!('headActionAt' in request.resource.data) || request.resource.data.headActionAt == null) &&
+                       (!('registrarUid' in request.resource.data) || request.resource.data.registrarUid == null) &&
+                       (!('registrarComment' in request.resource.data) || request.resource.data.registrarComment == null) &&
+                       (!('registrarActionAt' in request.resource.data) || request.resource.data.registrarActionAt == null);
+
+      // Application Review & Workflow Transitions:
+      // Strict diff validation using affectedKeys().hasOnly([...])
+      //
+      // 1. Department Head:
+      //    Can only update status (to 'forwarded' or 'rejected'), headUid, headComment, and headActionAt.
+      //    Cannot alter applicant details, dates, total days, or registrar fields.
+      //
+      // 2. Registrar:
+      //    Can only update status (to 'approved' or 'rejected'), registrarUid, registrarComment, and registrarActionAt.
+      //    Must occur strictly AFTER head review ('forwarded'), preserving complete department head notes.
+      //
+      // 3. Admin:
+      //    Administrative override if required.
+      allow update: if isApprovedAndActive() && (
+        // Faculty Applicant cancellation transition
+        (resource.data.applicantUid == request.auth.uid &&
+         resource.data.status == 'pending' &&
+         request.resource.data.status == 'cancelled' &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelReason']))
+        ||
+        // Department Head review transition
+        (isDeptHead() &&
+         resource.data.departmentId == getUserDepartmentId() &&
+         resource.data.status == 'pending' &&
+         (request.resource.data.status == 'forwarded' || request.resource.data.status == 'rejected') &&
+         request.resource.data.headUid == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'headUid', 'headComment', 'headActionAt']))
+        ||
+        // Registrar final approval transition
+        (isRegistrar() &&
+         resource.data.status == 'forwarded' &&
+         (request.resource.data.status == 'approved' || request.resource.data.status == 'rejected') &&
+         request.resource.data.registrarUid == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'registrarUid', 'registrarComment', 'registrarActionAt']))
+        ||
+        isAdmin()
+      );
+
+      // Deletion is strictly prohibited to guarantee academic leave audit trail
+      allow delete: if false;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  4. LEAVE BALANCES (/leave_balances/{balanceId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /leave_balances/{balanceId} {
+      // Users can view their own balance; Head, Registrar, Admin can inspect balances
+      allow read: if isAuthenticated() && (
+        resource.data.userUid == request.auth.uid ||
+        (isDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
+        isRegistrar()
+      );
+
+      // Allotted leave balances can only be updated by Admin or a trusted backend
+      allow write: if isAdmin();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  5. NOTIFICATIONS (/notifications/{notificationId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /notifications/{notificationId} {
+      // Users can only view notifications addressed to them
+      allow read: if isAuthenticated() && resource.data.recipientUid == request.auth.uid;
+
+      // Creation allowed by authorized staff or self-notifications:
+      // - Admin & Registrar can notify users
+      // - Department Head can ONLY notify users belonging to their own department
+      // - Users can create self-notifications
+      allow create: if isAuthenticated() && (
+        isAdmin() ||
+        isRegistrar() ||
+        (isDeptHead() &&
+         exists(/databases/$(database)/documents/users/$(request.resource.data.recipientUid)) &&
+         get(/databases/$(database)/documents/users/$(request.resource.data.recipientUid)).data.departmentId == getUserDepartmentId()) ||
+        request.resource.data.recipientUid == request.auth.uid
+      );
+
+      // Recipient can only toggle read status ('isRead')
+      allow update: if isAuthenticated() &&
+                       resource.data.recipientUid == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+
+      // Users can dismiss their own notifications
+      allow delete: if isAuthenticated() && resource.data.recipientUid == request.auth.uid;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  6. DEPARTMENTS & LEAVE TYPES CATALOGUES
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /departments/{departmentId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /leave_types/{leaveTypeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  7. OFFICIAL UNIVERSITY INFO & WEBSITE SYNC CACHE (/university_info/{infoId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /university_info/{infoId} {
+      // Authenticated users and registration visitors can read official university public info
+      allow read: if true;
+      // Only authorized Admin can update university info documents directly; otherwise via backend sync
+      allow write: if isAdmin();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  8. AUDIT LOGS (/audit_logs/{logId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      // Client writes are completely prohibited. Only trusted Admin SDK / Cloud Functions can write.
+      allow write: if false;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  9. SYSTEM CONFIGURATION (/system_config/{configId})
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /system_config/{configId} {
+      // Read access restricted to verified Admins
+      allow read: if isAdmin();
+      // Client writes strictly denied; only Cloud Functions Admin SDK can write bootstrap locks
+      allow write: if false;
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    //  DEFAULT DENY
+    // ═════════════════════════════════════════════════════════════════════════
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

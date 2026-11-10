@@ -1,0 +1,139 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  storage.rules  –  Leavexa Secure Role-Aware Firebase Storage Security Rules
+// ─────────────────────────────────────────────────────────────────────────────
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // ── Authentication & Role Helpers ────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function getRole() {
+      return request.auth.token.role;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && getRole() == 'admin';
+    }
+
+    function isRegistrar() {
+      return isAuthenticated() && (getRole() == 'registrar' || isAdmin());
+    }
+
+    function isDeptHead() {
+      return isAuthenticated() && (getRole() == 'department_head' || isAdmin());
+    }
+
+    function getUserDepartmentId() {
+      return request.auth.token.departmentId;
+    }
+
+    function hasValidDepartmentClaim() {
+      return isAuthenticated() &&
+             request.auth.token.departmentId is string &&
+             request.auth.token.departmentId.size() > 0;
+    }
+
+    // ── Department Head Application Verification ─────────────────────────────
+
+    function isDeptHeadForApp(appId) {
+      return isDeptHead() &&
+             hasValidDepartmentClaim() &&
+             firestore.exists(/databases/(default)/documents/leave_applications/$(appId)) &&
+             firestore.get(/databases/(default)/documents/leave_applications/$(appId)).data.departmentId == getUserDepartmentId();
+    }
+
+    // ── Content Validation Helpers ───────────────────────────────────────────
+
+    function isValidDocumentType() {
+      return request.resource.contentType.matches('application/pdf') ||
+             request.resource.contentType.matches('image/(jpeg|jpg|png)');
+    }
+
+    function isValidImageType() {
+      return request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+    }
+
+    function isUnder10MB() {
+      return request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    function isUnder5MB() {
+      return request.resource.size <= 5 * 1024 * 1024;
+    }
+
+    // ── Deletion Permission Helpers ──────────────────────────────────────────
+
+    function canDeleteLeaveDocument(applicantUid, appId) {
+      // 1. Admin retains necessary administrative cleanup through trusted backend/management
+      return isAdmin() ||
+             // 2. Faculty member: only permitted if application is not yet submitted (orphaned)
+             //    or in draft/cancelled state. Once submitted (pending/forwarded/approved/rejected),
+             //    deletion is strictly prohibited to preserve the official audit trail.
+             (isOwner(applicantUid) &&
+              (!firestore.exists(/databases/(default)/documents/leave_applications/$(appId)) ||
+               firestore.get(/databases/(default)/documents/leave_applications/$(appId)).data.status in ['draft', 'cancelled']));
+    }
+
+    // ── 1. Leave Application Attachments ─────────────────────────────────────
+    // Path: /leave_documents/{applicantUid}/{applicationId}/{filename}
+    match /leave_documents/{applicantUid}/{applicationId}/{filename} {
+      // Read access:
+      // - Faculty applicant can read their own uploaded leave document
+      // - Registrar and Admin can read documents for university-wide review
+      // - Department Head can read documents ONLY if they possess a valid department claim
+      //   matching the application's department record. Missing or invalid claims result in denial.
+      allow read: if isOwner(applicantUid) ||
+                     isRegistrar() ||
+                     isDeptHeadForApp(applicationId);
+
+      // Create access:
+      // - Faculty can upload only to their own designated path
+      // - Allowed ONLY if the object does not already exist (resource == null)
+      // - Enforces file size limit (<= 10MB) and valid document MIME types (PDF, PNG, JPG)
+      allow create: if resource == null &&
+                       isOwner(applicantUid) &&
+                       isUnder10MB() &&
+                       isValidDocumentType();
+
+      // Updates to existing leave documents are denied to prevent retroactive evidence tampering
+      allow update: if false;
+
+      // Deletion access:
+      // - Admin retains administrative cleanup authority.
+      // - Faculty applicant may ONLY delete if the application is unsubmitted or in draft/cancelled state.
+      // - Deletion is blocked once submitted to protect the integrity of active/completed records.
+      allow delete: if canDeleteLeaveDocument(applicantUid, applicationId);
+    }
+
+    // ── 2. Profile Photos ────────────────────────────────────────────────────
+    // Path: /profile_images/{uid}/{filename}
+    match /profile_images/{uid}/{filename} {
+      // Authenticated users in the institution can view profile photos
+      allow read: if isAuthenticated();
+
+      // Users can upload/update only their own profile photo (or Admin override)
+      // File size <= 5MB, image types only (JPEG, PNG, WEBP)
+      allow create, update: if (isOwner(uid) || isAdmin()) &&
+                               isUnder5MB() &&
+                               isValidImageType();
+
+      // Deletion: owner or Admin
+      allow delete: if isOwner(uid) || isAdmin();
+    }
+
+    // ── Default Deny ─────────────────────────────────────────────────────────
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

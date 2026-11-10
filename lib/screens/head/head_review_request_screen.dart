@@ -5,17 +5,28 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/leave_application_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
+import '../../services/notification_service.dart';
 
 enum _ReviewDecision { approve, requestChanges, reject }
 
 class HeadReviewRequestScreen extends StatefulWidget {
   final Map<String, dynamic>? requestData;
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
+  final NotificationService? notificationService;
 
   const HeadReviewRequestScreen({
     super.key,
     this.requestData,
+    this.leaveRepository,
+    this.authRepository,
+    this.notificationService,
   });
 
   @override
@@ -24,8 +35,14 @@ class HeadReviewRequestScreen extends StatefulWidget {
 }
 
 class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
   _ReviewDecision _selectedDecision = _ReviewDecision.approve;
   final _commentCtrl = TextEditingController();
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -33,10 +50,45 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
     super.dispose();
   }
 
-  void _onSubmit() {
+  Future<void> _onSubmit() async {
+    if (_isSubmitting) return;
     final comment = _commentCtrl.text.trim();
-    switch (_selectedDecision) {
-      case _ReviewDecision.approve:
+    final args =
+        widget.requestData ??
+        (ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?) ??
+        {};
+    final appId =
+        (args['model'] as LeaveApplicationModel?)?.id ??
+        (args['id'] as String? ?? '');
+
+    setState(() => _isSubmitting = true);
+
+    try {
+      final headUser = await _authRepo.getCurrentUserProfile();
+      final headUid = headUser?.uid ?? _authRepo.currentUserId ?? 'head_uid';
+
+      if (appId.isNotEmpty) {
+        if (_selectedDecision == _ReviewDecision.approve) {
+          await _leaveRepo.forwardLeave(
+            applicationId: appId,
+            headUid: headUid,
+            comment: comment.isNotEmpty
+                ? comment
+                : 'Leave approved and endorsed to Dean/Registrar.',
+          );
+        } else if (_selectedDecision == _ReviewDecision.reject) {
+          await _leaveRepo.headRejectLeave(
+            applicationId: appId,
+            headUid: headUid,
+            comment: comment.isNotEmpty
+                ? comment
+                : 'Leave request rejected by Department Head.',
+          );
+        }
+      }
+
+      if (!mounted) return;
+      if (_selectedDecision == _ReviewDecision.approve) {
         AppHelpers.showSuccess(
           context,
           'Leave Request Approved and Endorsed to Dean!',
@@ -46,11 +98,10 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
           'comment': comment.isNotEmpty
               ? comment
               : 'Leave approved. Ensure class coverage as mentioned.',
-          'reviewTime': '24 Sep, 03:45 PM',
-          'reviewedBy': 'Head of Department',
+          'reviewTime': DateFormat('dd MMM, hh:mm a').format(DateTime.now()),
+          'reviewedBy': headUser?.fullName ?? 'Head of Department',
         });
-        break;
-      case _ReviewDecision.requestChanges:
+      } else if (_selectedDecision == _ReviewDecision.requestChanges) {
         AppHelpers.showSuccess(
           context,
           'Clarification requested from faculty member.',
@@ -60,30 +111,32 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
           'comment': comment.isNotEmpty
               ? comment
               : "Please update the doctor's certificate with the exact treatment date and re-submit.",
-          'reviewTime': '24 Sep, 03:45 PM',
-          'reviewedBy': 'Head of Department',
+          'reviewTime': DateFormat('dd MMM, hh:mm a').format(DateTime.now()),
+          'reviewedBy': headUser?.fullName ?? 'Head of Department',
         });
-        break;
-      case _ReviewDecision.reject:
-        AppHelpers.showError(
-          context,
-          'Leave Request Rejected.',
-        );
+      } else {
+        AppHelpers.showError(context, 'Leave Request Rejected.');
         Navigator.pop(context, {
           'status': 'Rejected',
           'comment': comment.isNotEmpty
               ? comment
               : 'The leave cannot be approved due to ongoing academic assessment during this period.',
-          'reviewTime': '24 Sep, 03:45 PM',
-          'reviewedBy': 'Head of Department',
+          'reviewTime': DateFormat('dd MMM, hh:mm a').format(DateTime.now()),
+          'reviewedBy': headUser?.fullName ?? 'Head of Department',
         });
-        break;
+      }
+    } catch (e) {
+      if (!mounted) return;
+      AppHelpers.showError(context, 'Failed to update review: $e');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final args = widget.requestData ??
+    final args =
+        widget.requestData ??
         (ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?) ??
         {};
 
@@ -94,7 +147,8 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
     final datesFull = args['datesFull'] ?? '25 Sep – 26 Sep, 2026';
     final duration = args['duration'] ?? '2 Days';
     final coverage = args['teachingCovered'] ?? 'Ms. Sadia Karim (CS 201 Lab)';
-    final reason = args['reason'] ??
+    final reason =
+        args['reason'] ??
         'Medical consultation & dental treatment (physician certificate uploaded).';
     final attachmentName = args['attachmentName'] ?? 'Medical_Certificate.pdf';
 
@@ -102,23 +156,29 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final primaryColor =
-            isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final primaryColor = isDark
+            ? const Color(0xFF047857)
+            : const Color(0xFF1B4332);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -130,11 +190,7 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
               centerTitle: false,
               titleSpacing: 0,
               leading: IconButton(
-                icon: Icon(
-                  Icons.arrow_back,
-                  color: textPrimary,
-                  size: 22,
-                ),
+                icon: Icon(Icons.arrow_back, color: textPrimary, size: 22),
                 onPressed: () => Navigator.pop(context),
               ),
               title: Text(
@@ -215,8 +271,9 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                                             ),
                                             decoration: BoxDecoration(
                                               color: isDark
-                                                  ? const Color(0xFF1E3A8A)
-                                                      .withValues(alpha: 0.4)
+                                                  ? const Color(
+                                                      0xFF1E3A8A,
+                                                    ).withValues(alpha: 0.4)
                                                   : const Color(0xFFEFF6FF),
                                               borderRadius:
                                                   BorderRadius.circular(6),
@@ -285,8 +342,7 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
 
                                 // Date & Duration
                                 Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Icon(
                                       Icons.calendar_today_outlined,
@@ -311,8 +367,7 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
 
                                 // Teaching Covered
                                 Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Icon(
                                       Icons.assignment_ind_outlined,
@@ -349,8 +404,7 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
 
                                 // Reason
                                 Row(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Icon(
                                       Icons.description_outlined,
@@ -456,21 +510,21 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                                 // Option 1: Approve
                                 _DecisionOptionTile(
                                   label: 'Approve',
-                                  isSelected: _selectedDecision ==
+                                  isSelected:
+                                      _selectedDecision ==
                                       _ReviewDecision.approve,
-                                  selectedBorderColor:
-                                      const Color(0xFF86EFAC),
+                                  selectedBorderColor: const Color(0xFF86EFAC),
                                   selectedBgColor: isDark
-                                      ? const Color(0xFF064E3B)
-                                          .withValues(alpha: 0.5)
+                                      ? const Color(
+                                          0xFF064E3B,
+                                        ).withValues(alpha: 0.5)
                                       : const Color(0xFFE8F5E9),
-                                  selectedIconColor:
-                                      const Color(0xFF16A34A),
-                                  selectedTextColor:
-                                      const Color(0xFF16A34A),
-                                  onTap: () => setState(() =>
-                                      _selectedDecision =
-                                          _ReviewDecision.approve),
+                                  selectedIconColor: const Color(0xFF16A34A),
+                                  selectedTextColor: const Color(0xFF16A34A),
+                                  onTap: () => setState(
+                                    () => _selectedDecision =
+                                        _ReviewDecision.approve,
+                                  ),
                                   isDark: isDark,
                                   borderColor: borderColor,
                                   textPrimary: textPrimary,
@@ -481,21 +535,21 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                                 // Option 2: Request Changes
                                 _DecisionOptionTile(
                                   label: 'Request Changes',
-                                  isSelected: _selectedDecision ==
+                                  isSelected:
+                                      _selectedDecision ==
                                       _ReviewDecision.requestChanges,
-                                  selectedBorderColor:
-                                      const Color(0xFFFDE68A),
+                                  selectedBorderColor: const Color(0xFFFDE68A),
                                   selectedBgColor: isDark
-                                      ? const Color(0xFF451A03)
-                                          .withValues(alpha: 0.5)
+                                      ? const Color(
+                                          0xFF451A03,
+                                        ).withValues(alpha: 0.5)
                                       : const Color(0xFFFFFBEB),
-                                  selectedIconColor:
-                                      const Color(0xFFD97706),
-                                  selectedTextColor:
-                                      const Color(0xFFD97706),
-                                  onTap: () => setState(() =>
-                                      _selectedDecision =
-                                          _ReviewDecision.requestChanges),
+                                  selectedIconColor: const Color(0xFFD97706),
+                                  selectedTextColor: const Color(0xFFD97706),
+                                  onTap: () => setState(
+                                    () => _selectedDecision =
+                                        _ReviewDecision.requestChanges,
+                                  ),
                                   isDark: isDark,
                                   borderColor: borderColor,
                                   textPrimary: textPrimary,
@@ -506,21 +560,21 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                                 // Option 3: Reject
                                 _DecisionOptionTile(
                                   label: 'Reject',
-                                  isSelected: _selectedDecision ==
+                                  isSelected:
+                                      _selectedDecision ==
                                       _ReviewDecision.reject,
-                                  selectedBorderColor:
-                                      const Color(0xFFFECDD3),
+                                  selectedBorderColor: const Color(0xFFFECDD3),
                                   selectedBgColor: isDark
-                                      ? const Color(0xFF451A03)
-                                          .withValues(alpha: 0.5)
+                                      ? const Color(
+                                          0xFF451A03,
+                                        ).withValues(alpha: 0.5)
                                       : const Color(0xFFFEF2F2),
-                                  selectedIconColor:
-                                      const Color(0xFFDC2626),
-                                  selectedTextColor:
-                                      const Color(0xFFDC2626),
-                                  onTap: () => setState(() =>
-                                      _selectedDecision =
-                                          _ReviewDecision.reject),
+                                  selectedIconColor: const Color(0xFFDC2626),
+                                  selectedTextColor: const Color(0xFFDC2626),
+                                  onTap: () => setState(
+                                    () => _selectedDecision =
+                                        _ReviewDecision.reject,
+                                  ),
                                   isDark: isDark,
                                   borderColor: borderColor,
                                   textPrimary: textPrimary,
@@ -627,13 +681,13 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                       child: ElevatedButton(
                         onPressed: _onSubmit,
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: _selectedDecision ==
-                                  _ReviewDecision.reject
+                          backgroundColor:
+                              _selectedDecision == _ReviewDecision.reject
                               ? const Color(0xFFDC2626)
                               : _selectedDecision ==
-                                      _ReviewDecision.requestChanges
-                                  ? const Color(0xFFD97706)
-                                  : primaryColor,
+                                    _ReviewDecision.requestChanges
+                              ? const Color(0xFFD97706)
+                              : primaryColor,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
@@ -654,9 +708,9 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
                               _selectedDecision == _ReviewDecision.reject
                                   ? 'Reject Request'
                                   : _selectedDecision ==
-                                          _ReviewDecision.requestChanges
-                                      ? 'Submit Change Request'
-                                      : 'Approve Request',
+                                        _ReviewDecision.requestChanges
+                                  ? 'Submit Change Request'
+                                  : 'Approve Request',
                               style: const TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
@@ -734,7 +788,9 @@ class _DecisionOptionTile extends StatelessWidget {
               Icon(
                 Icons.radio_button_unchecked_rounded,
                 size: 20,
-                color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                color: isDark
+                    ? const Color(0xFF64748B)
+                    : const Color(0xFF94A3B8),
               ),
             const SizedBox(width: 12),
             Text(

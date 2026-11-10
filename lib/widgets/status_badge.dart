@@ -13,16 +13,20 @@ class StatusBadge extends StatelessWidget {
 
   String get _label {
     switch (status.toLowerCase()) {
-      case 'approved':  return AppStrings.approved;
-      case 'rejected':  return AppStrings.rejected;
-      case 'forwarded': return AppStrings.forwarded;
-      default:          return AppStrings.pending;
+      case 'approved':
+        return AppStrings.approved;
+      case 'rejected':
+        return AppStrings.rejected;
+      case 'forwarded':
+        return AppStrings.forwarded;
+      default:
+        return AppStrings.pending;
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final color   = AppHelpers.statusColor(status);
+    final color = AppHelpers.statusColor(status);
     final bgColor = AppHelpers.statusBgColor(status);
 
     return Container(

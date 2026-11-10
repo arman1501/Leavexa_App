@@ -7,16 +7,23 @@ import 'package:flutter/services.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/faculty_profile_state.dart';
+import '../../repositories/auth_repository.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final AuthRepository? authRepository;
+
+  const SettingsScreen({super.key, this.authRepository});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  late final AuthRepository _authRepository =
+      widget.authRepository ?? AuthRepository();
   bool _notificationsEnabled = true;
+  bool _isLoggingOut = false;
 
   void _showLogoutDialog(bool isDark) {
     showDialog(
@@ -34,7 +41,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 width: 52,
                 height: 52,
                 decoration: BoxDecoration(
-                  color: isDark ? const Color(0xFF451A1A) : const Color(0xFFFEF2F2),
+                  color: isDark
+                      ? const Color(0xFF451A1A)
+                      : const Color(0xFFFEF2F2),
                   shape: BoxShape.circle,
                 ),
                 child: const Icon(
@@ -50,7 +59,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w700,
-                  color: isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A),
+                  color: isDark
+                      ? const Color(0xFFF8FAFC)
+                      : const Color(0xFF0F172A),
                   letterSpacing: -0.2,
                 ),
               ),
@@ -61,7 +72,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w400,
-                  color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B),
+                  color: isDark
+                      ? const Color(0xFF94A3B8)
+                      : const Color(0xFF64748B),
                   height: 1.35,
                 ),
               ),
@@ -72,10 +85,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     child: OutlinedButton(
                       onPressed: () => Navigator.pop(dialogContext),
                       style: OutlinedButton.styleFrom(
-                        backgroundColor: isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC),
-                        foregroundColor: isDark ? const Color(0xFFCBD5E1) : const Color(0xFF475569),
+                        backgroundColor: isDark
+                            ? const Color(0xFF0F172A)
+                            : const Color(0xFFF8FAFC),
+                        foregroundColor: isDark
+                            ? const Color(0xFFCBD5E1)
+                            : const Color(0xFF475569),
                         side: BorderSide(
-                          color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+                          color: isDark
+                              ? const Color(0xFF334155)
+                              : const Color(0xFFE2E8F0),
                         ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
@@ -95,14 +114,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: ElevatedButton(
-                      onPressed: () {
-                        Navigator.pop(dialogContext);
-                        Navigator.pushNamedAndRemoveUntil(
-                          context,
-                          AppRoutes.login,
-                          (route) => false,
-                        );
-                      },
+                      onPressed: _isLoggingOut
+                          ? null
+                          : () async {
+                              Navigator.pop(dialogContext);
+                              setState(() => _isLoggingOut = true);
+                              try {
+                                await _authRepository.logout();
+                                AppThemeState.instance.resetToLightMode();
+                                FacultyProfileState.instance.reset();
+                                if (mounted) {
+                                  Navigator.pushNamedAndRemoveUntil(
+                                    context,
+                                    AppRoutes.login,
+                                    (route) => false,
+                                  );
+                                }
+                              } catch (e) {
+                                if (mounted) {
+                                  setState(() => _isLoggingOut = false);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text('Failed to log out: $e'),
+                                      backgroundColor: const Color(0xFFDC2626),
+                                    ),
+                                  );
+                                }
+                              }
+                            },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: const Color(0xFFDC2626),
                         foregroundColor: Colors.white,
@@ -136,17 +175,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFB);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFB);
         final cardColor = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final titleColor = isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final subtitleColor = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final dividerColor = isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final titleColor = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final subtitleColor = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final dividerColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -155,7 +206,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
               backgroundColor: bgColor,
               elevation: 0,
               leading: IconButton(
-                icon: Icon(Icons.arrow_back_rounded, color: titleColor, size: 22),
+                icon: Icon(
+                  Icons.arrow_back_rounded,
+                  color: titleColor,
+                  size: 22,
+                ),
                 onPressed: () => Navigator.pop(context),
               ),
               title: Text(
@@ -172,7 +227,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             body: SafeArea(
               child: SingleChildScrollView(
                 physics: const BouncingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 12,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -186,28 +244,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         _buildSettingTile(
                           icon: Icons.notifications_none_rounded,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'Notifications',
                           subtitle: 'Manage leave and application...',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           trailing: Switch.adaptive(
                             value: _notificationsEnabled,
-                            activeTrackColor: isDark ? const Color(0xFF0D9488) : const Color(0xFF042F2C),
+                            activeTrackColor: isDark
+                                ? const Color(0xFF0D9488)
+                                : const Color(0xFF042F2C),
                             onChanged: (val) {
                               setState(() => _notificationsEnabled = val);
                               AppHelpers.showSuccess(
                                 context,
-                                val ? 'Notifications enabled' : 'Notifications disabled',
+                                val
+                                    ? 'Notifications enabled'
+                                    : 'Notifications disabled',
                               );
                             },
                           ),
                         ),
                         _buildSettingTile(
                           icon: Icons.dark_mode_outlined,
-                          iconBgColor: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
-                          iconColor: isDark ? const Color(0xFF38BDF8) : const Color(0xFF64748B),
+                          iconBgColor: isDark
+                              ? const Color(0xFF334155)
+                              : const Color(0xFFF1F5F9),
+                          iconColor: isDark
+                              ? const Color(0xFF38BDF8)
+                              : const Color(0xFF64748B),
                           title: 'Dark Mode',
                           subtitle: 'Use dark appearance',
                           titleColor: titleColor,
@@ -235,28 +305,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         _buildSettingTile(
                           icon: Icons.key_outlined,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'Change Password',
                           subtitle: 'Update your account password',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           chevronColor: subtitleColor,
                           onTap: () {
-                            AppHelpers.showSuccess(context, 'Change Password opened');
+                            AppHelpers.showSuccess(
+                              context,
+                              'Change Password opened',
+                            );
                           },
                         ),
                         _buildSettingTile(
                           icon: Icons.shield_outlined,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'Privacy & Security',
                           subtitle: 'Manage your privacy and security',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           chevronColor: subtitleColor,
                           onTap: () {
-                            AppHelpers.showSuccess(context, 'Privacy & Security opened');
+                            AppHelpers.showSuccess(
+                              context,
+                              'Privacy & Security opened',
+                            );
                           },
                         ),
                       ],
@@ -274,40 +358,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         _buildSettingTile(
                           icon: Icons.help_outline_rounded,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'Help & Support',
                           subtitle: 'Get help with Leavexa',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           chevronColor: subtitleColor,
                           onTap: () {
-                            AppHelpers.showSuccess(context, 'Help & Support opened');
+                            AppHelpers.showSuccess(
+                              context,
+                              'Help & Support opened',
+                            );
                           },
                         ),
                         _buildSettingTile(
                           icon: Icons.info_outline_rounded,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'About Leavexa',
                           subtitle: 'Version 1.0.0',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           chevronColor: subtitleColor,
                           onTap: () {
-                            AppHelpers.showSuccess(context, 'Leavexa v1.0.0 (Latest)');
+                            AppHelpers.showSuccess(
+                              context,
+                              'Leavexa v1.0.0 (Latest)',
+                            );
                           },
                         ),
                         _buildSettingTile(
                           icon: Icons.article_outlined,
-                          iconBgColor: isDark ? const Color(0xFF064E3B) : const Color(0xFFECFDF5),
-                          iconColor: isDark ? const Color(0xFF34D399) : const Color(0xFF0D9488),
+                          iconBgColor: isDark
+                              ? const Color(0xFF064E3B)
+                              : const Color(0xFFECFDF5),
+                          iconColor: isDark
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFF0D9488),
                           title: 'Terms & Conditions',
                           titleColor: titleColor,
                           subtitleColor: subtitleColor,
                           chevronColor: subtitleColor,
                           onTap: () {
-                            AppHelpers.showSuccess(context, 'Terms & Conditions opened');
+                            AppHelpers.showSuccess(
+                              context,
+                              'Terms & Conditions opened',
+                            );
                           },
                         ),
                       ],
@@ -325,7 +430,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       children: [
                         _buildSettingTile(
                           icon: Icons.logout_rounded,
-                          iconBgColor: isDark ? const Color(0xFF451A1A) : const Color(0xFFFEF2F2),
+                          iconBgColor: isDark
+                              ? const Color(0xFF451A1A)
+                              : const Color(0xFFFEF2F2),
                           iconColor: const Color(0xFFEF4444),
                           title: 'Logout',
                           titleColor: const Color(0xFFEF4444),
@@ -346,7 +453,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: TextStyle(
                               fontSize: 12,
                               fontWeight: FontWeight.w500,
-                              color: isDark ? const Color(0xFF64748B) : const Color(0xFF94A3B8),
+                              color: isDark
+                                  ? const Color(0xFF64748B)
+                                  : const Color(0xFF94A3B8),
                             ),
                           ),
                           const SizedBox(height: 3),
@@ -355,7 +464,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.w400,
-                              color: isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1),
+                              color: isDark
+                                  ? const Color(0xFF475569)
+                                  : const Color(0xFFCBD5E1),
                             ),
                           ),
                         ],
@@ -444,11 +555,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 color: iconBgColor,
                 shape: BoxShape.circle,
               ),
-              child: Icon(
-                icon,
-                color: iconColor,
-                size: 19,
-              ),
+              child: Icon(icon, color: iconColor, size: 19),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -480,11 +587,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             if (trailing != null)
               trailing
             else
-              Icon(
-                Icons.chevron_right_rounded,
-                color: chevronColor,
-                size: 20,
-              ),
+              Icon(Icons.chevron_right_rounded, color: chevronColor, size: 20),
           ],
         ),
       ),

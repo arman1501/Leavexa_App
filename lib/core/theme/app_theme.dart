@@ -9,8 +9,9 @@ class AppThemeState {
   AppThemeState._();
   static final AppThemeState instance = AppThemeState._();
 
-  final ValueNotifier<ThemeMode> themeModeNotifier =
-      ValueNotifier<ThemeMode>(ThemeMode.light);
+  final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier<ThemeMode>(
+    ThemeMode.light,
+  );
 
   bool get isDarkMode => themeModeNotifier.value == ThemeMode.dark;
 
@@ -18,8 +19,9 @@ class AppThemeState {
     if (isDark != null) {
       themeModeNotifier.value = isDark ? ThemeMode.dark : ThemeMode.light;
     } else {
-      themeModeNotifier.value =
-          themeModeNotifier.value == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark;
+      themeModeNotifier.value = themeModeNotifier.value == ThemeMode.dark
+          ? ThemeMode.light
+          : ThemeMode.dark;
     }
   }
 

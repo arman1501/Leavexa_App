@@ -1,1 +1,69 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"leavexa","appId":"1:73712036420:android:2db6ce88ec2f0d418cea11","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"leavexa","appId":"1:73712036420:ios:fb186e6c5238ddf98cea11","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"leavexa","configurations":{"android":"1:73712036420:android:2db6ce88ec2f0d418cea11","ios":"1:73712036420:ios:fb186e6c5238ddf98cea11","web":"1:73712036420:web:426d36d38ae398958cea11"}}}}}}
+{
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ]
+    }
+  ],
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": {
+      "port": 9099
+    },
+    "functions": {
+      "port": 5001
+    },
+    "firestore": {
+      "port": 8088
+    },
+    "storage": {
+      "port": 9199
+    },
+    "ui": {
+      "enabled": true,
+      "port": 4000
+    }
+  },
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "leavexa",
+          "appId": "1:73712036420:android:2db6ce88ec2f0d418cea11",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "leavexa",
+          "appId": "1:73712036420:ios:fb186e6c5238ddf98cea11",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "leavexa",
+          "configurations": {
+            "android": "1:73712036420:android:2db6ce88ec2f0d418cea11",
+            "ios": "1:73712036420:ios:fb186e6c5238ddf98cea11",
+            "web": "1:73712036420:web:426d36d38ae398958cea11"
+          }
+        }
+      }
+    }
+  }
+}

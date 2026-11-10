@@ -5,24 +5,92 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class HeadRequestsScreen extends StatefulWidget {
-  const HeadRequestsScreen({super.key});
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
+
+  const HeadRequestsScreen({
+    super.key,
+    this.leaveRepository,
+    this.authRepository,
+  });
 
   @override
   State<HeadRequestsScreen> createState() => _HeadRequestsScreenState();
 }
 
 class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
   int _currentNavIndex = 1; // 1: Requests tab active
-  int _selectedFilterIndex = 1; // Default to Reviewed (12) to match reference screenshot
+  int _selectedFilterIndex =
+      1; // Default to Reviewed (12) to match reference screenshot
   String _searchQuery = '';
   bool _isSearching = false;
   final _searchCtrl = TextEditingController();
   String _selectedSort = 'Latest First';
+  bool _hasFetchedReal = false;
+  List<Map<String, dynamic>> _realRequests = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRealPendingRequests();
+  }
+
+  Future<void> _loadRealPendingRequests() async {
+    try {
+      final user = await _authRepo.getCurrentUserProfile();
+      final deptId = user?.departmentId ?? 'dept_cse';
+      final apps = await _leaveRepo.departmentPending(deptId);
+      if (mounted) {
+        setState(() {
+          _realRequests = apps.map((a) {
+            final startStr = DateFormat('dd MMM').format(a.startDate);
+            final endStr = DateFormat('dd MMM').format(a.endDate);
+            final fullDates =
+                '${DateFormat('dd MMM').format(a.startDate)} – ${DateFormat('dd MMM, yyyy').format(a.endDate)}';
+            return {
+              'id': a.id,
+              'applicantUid': a.applicantUid,
+              'facultyName': a.applicantName,
+              'facultyId': a.applicantEmployeeId,
+              'designation': 'Faculty Member • ${a.departmentName}',
+              'leaveType': a.leaveTypeName,
+              'accentColor': const Color(0xFF16A34A),
+              'dateRange': '$startStr – $endStr',
+              'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
+              'datesFull': fullDates,
+              'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
+              'teachingCovered': 'Arranged with Department',
+              'reviewedBy': a.headUid,
+              'reviewedAt': a.headActionAt != null
+                  ? DateFormat('dd MMM, hh:mm a').format(a.headActionAt!)
+                  : null,
+              'reason': a.reason,
+              'attachmentName': a.documentUrl ?? 'Application_Doc.pdf',
+              'attachmentSize': '1.0 MB',
+              'submittedAt':
+                  '${DateFormat('dd MMM, hh:mm a').format(a.appliedAt)} by ${a.applicantName}',
+              'status': 'Pending',
+              'model': a,
+            };
+          }).toList();
+          _hasFetchedReal = true;
+        });
+      }
+    } catch (_) {}
+  }
 
   final List<Map<String, dynamic>> _allRequests = [
     // ── REVIEWED REQUESTS ──────────────────────────────────────────────────
@@ -40,8 +108,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       'teachingCovered': 'Ms. Sadia Karim (CS 201 Lab)',
       'reviewedBy': 'Head of Department',
       'reviewedAt': '24 Sep, 03:45 PM',
-      'reviewComment':
-          'Leave approved. Ensure class coverage as mentioned.',
+      'reviewComment': 'Leave approved. Ensure class coverage as mentioned.',
       'reason':
           'Medical consultation & dental treatment (physician certificate uploaded).',
       'attachmentName': 'Medical_Certificate.pdf',
@@ -55,7 +122,9 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       'facultyId': 'CSE-1005',
       'designation': 'Professor • Computer Systems',
       'leaveType': 'Casual Leave',
-      'accentColor': const Color(0xFFF59E0B), // Orange/Amber accent for Changes Requested
+      'accentColor': const Color(
+        0xFFF59E0B,
+      ), // Orange/Amber accent for Changes Requested
       'dateRange': '15 Sep – 16 Sep',
       'duration': '2 Days',
       'datesFull': '15 Sep – 16 Sep, 2026',
@@ -65,8 +134,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       'reviewedAt': '24 Sep, 03:45 PM',
       'reviewComment':
           "Please update the doctor's certificate with the exact treatment date and re-submit.",
-      'reason':
-          'Personal work with student project evaluation review.',
+      'reason': 'Personal work with student project evaluation review.',
       'attachmentName': 'Clarification_Doc.pdf',
       'attachmentSize': '1.2 MB',
       'submittedAt': '14 Sep, 11:00 AM',
@@ -88,8 +156,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       'reviewedAt': '24 Sep, 03:45 PM',
       'rejectionReason':
           'The leave cannot be approved due to ongoing academic assessment during this period.',
-      'reason':
-          'Urgent relocation travel during scheduled mid-term exam week.',
+      'reason': 'Urgent relocation travel during scheduled mid-term exam week.',
       'attachmentName': 'Travel_Notice.pdf',
       'attachmentSize': '650 KB',
       'submittedAt': '08 Sep, 03:45 PM',
@@ -243,14 +310,24 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
     }
   }
 
+  List<Map<String, dynamic>> get _currentAllRequests {
+    if (_hasFetchedReal && _realRequests.isNotEmpty) {
+      return [
+        ..._realRequests,
+        ..._allRequests.where((r) => r['status'] != 'Pending'),
+      ];
+    }
+    return _allRequests;
+  }
+
   List<Map<String, dynamic>> get _filteredRequests {
-    return _allRequests.where((item) {
+    return _currentAllRequests.where((item) {
       final isPending = item['status'] == 'Pending';
       final matchesFilter = _selectedFilterIndex == 0
           ? isPending
           : _selectedFilterIndex == 1
-              ? !isPending
-              : true;
+          ? !isPending
+          : true;
       if (!matchesFilter) return false;
       if (_searchQuery.isEmpty) return true;
       final q = _searchQuery.toLowerCase();
@@ -266,21 +343,26 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -377,8 +459,9 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                             ),
                             border: InputBorder.none,
                             isDense: true,
-                            contentPadding:
-                                const EdgeInsets.symmetric(vertical: 12),
+                            contentPadding: const EdgeInsets.symmetric(
+                              vertical: 12,
+                            ),
                           ),
                         ),
                       ),
@@ -407,24 +490,21 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                         _FilterChip(
                           label: 'Pending (6)',
                           isSelected: _selectedFilterIndex == 0,
-                          onTap: () =>
-                              setState(() => _selectedFilterIndex = 0),
+                          onTap: () => setState(() => _selectedFilterIndex = 0),
                           isDark: isDark,
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
                           label: 'Reviewed (12)',
                           isSelected: _selectedFilterIndex == 1,
-                          onTap: () =>
-                              setState(() => _selectedFilterIndex = 1),
+                          onTap: () => setState(() => _selectedFilterIndex = 1),
                           isDark: isDark,
                         ),
                         const SizedBox(width: 8),
                         _FilterChip(
                           label: 'All',
                           isSelected: _selectedFilterIndex == 2,
-                          onTap: () =>
-                              setState(() => _selectedFilterIndex = 2),
+                          onTap: () => setState(() => _selectedFilterIndex = 2),
                           isDark: isDark,
                         ),
                       ],
@@ -443,8 +523,8 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                           _selectedFilterIndex == 1
                               ? 'Reviewed Requests'
                               : _selectedFilterIndex == 0
-                                  ? 'Pending Requests'
-                                  : 'All Requests',
+                              ? 'Pending Requests'
+                              : 'All Requests',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w800,
@@ -620,11 +700,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.sync_rounded,
-              size: 14,
-              color: Color(0xFFD97706),
-            ),
+            Icon(Icons.sync_rounded, size: 14, color: Color(0xFFD97706)),
             SizedBox(width: 4),
             Text(
               'Changes Requested',
@@ -651,11 +727,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
         child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.cancel_outlined,
-              size: 14,
-              color: Color(0xFFDC2626),
-            ),
+            Icon(Icons.cancel_outlined, size: 14, color: Color(0xFFDC2626)),
             SizedBox(width: 4),
             Text(
               'Rejected',
@@ -691,10 +763,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Left Accent Stripe
-            Container(
-              width: 4.5,
-              color: accentColor,
-            ),
+            Container(width: 4.5, color: accentColor),
             // Card Content Body
             Expanded(
               child: Padding(
@@ -715,7 +784,11 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                                 : const Color(0xFFF1F5F9),
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(Icons.person, size: 20, color: textPrimary),
+                          child: Icon(
+                            Icons.person,
+                            size: 20,
+                            color: textPrimary,
+                          ),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -832,9 +905,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                                   height: 1.3,
                                 ),
                                 children: [
-                                  const TextSpan(
-                                    text: 'Teaching Covered by: ',
-                                  ),
+                                  const TextSpan(text: 'Teaching Covered by: '),
                                   TextSpan(
                                     text: item['teachingCovered'] as String,
                                     style: TextStyle(
@@ -873,7 +944,8 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                                 children: [
                                   const TextSpan(text: 'Reviewed by: '),
                                   TextSpan(
-                                    text: item['reviewedBy'] as String? ??
+                                    text:
+                                        item['reviewedBy'] as String? ??
                                         'Department Head',
                                     style: TextStyle(
                                       fontWeight: FontWeight.w700,
@@ -970,10 +1042,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              width: 4.5,
-              color: accentColor,
-            ),
+            Container(width: 4.5, color: accentColor),
             Expanded(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -1116,9 +1185,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                                   height: 1.3,
                                 ),
                                 children: [
-                                  const TextSpan(
-                                    text: 'Teaching Covered by: ',
-                                  ),
+                                  const TextSpan(text: 'Teaching Covered by: '),
                                   TextSpan(
                                     text: item['teachingCovered'] as String,
                                     style: TextStyle(
@@ -1161,8 +1228,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
                             child: const Row(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -1193,8 +1259,7 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              padding:
-                                  const EdgeInsets.symmetric(vertical: 12),
+                              padding: const EdgeInsets.symmetric(vertical: 12),
                             ),
                             child: const Row(
                               mainAxisAlignment: MainAxisAlignment.center,
@@ -1366,14 +1431,15 @@ class _FilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeBg =
-        isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
+    final activeBg = isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
     final inactiveBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-    final inactiveBorder =
-        isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final inactiveBorder = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
     final activeText = Colors.white;
-    final inactiveText =
-        isDark ? const Color(0xFF94A3B8) : const Color(0xFF0F172A);
+    final inactiveText = isDark
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF0F172A);
 
     return GestureDetector(
       onTap: onTap,

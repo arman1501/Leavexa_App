@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/constants/app_strings.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
+import '../../repositories/auth_repository.dart';
+import '../../services/auth_exception.dart';
 import 'register_screen.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -10,7 +13,9 @@ import 'register_screen.dart';
 // ─────────────────────────────────────────────────────────────────────────────
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final AuthRepository? authRepository;
+
+  const LoginScreen({super.key, this.authRepository});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -23,7 +28,11 @@ class _LoginScreenState extends State<LoginScreen>
   final _passCtrl = TextEditingController();
   bool _obscurePass = true;
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
   bool _rememberMe = false;
+
+  late final AuthRepository _authRepository =
+      widget.authRepository ?? AuthRepository();
 
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fade;
@@ -52,23 +61,145 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
-  void _onLogin() {
+  Future<void> _onLogin() async {
+    if (_isLoading || _isGoogleLoading) return;
     if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isLoading = true);
-    Future.delayed(const Duration(seconds: 1), () {
+
+    try {
+      final user = await _authRepository.loginAndGetProfile(
+        email: _emailCtrl.text.trim(),
+        password: _passCtrl.text,
+      );
+
+      if (!mounted) return;
+
+      AppThemeState.instance.resetToLightMode();
+
+      final route = switch (user.role) {
+        AppStrings.roleFaculty => AppRoutes.facultyDashboard,
+        AppStrings.roleDeptHead => AppRoutes.headDashboard,
+        AppStrings.roleRegistrar => AppRoutes.registrarDashboard,
+        AppStrings.roleAdmin => AppRoutes.adminDashboard,
+        _ => null,
+      };
+
+      if (route != null) {
+        Navigator.pushReplacementNamed(context, route);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid role assigned to this account.'),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Login failed. Please try again.'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
+      );
+    } finally {
       if (mounted) {
         setState(() => _isLoading = false);
-        AppThemeState.instance.resetToLightMode();
-        final email = _emailCtrl.text.trim().toLowerCase();
-        if (email.contains('admin') || email.contains('registrar')) {
-          Navigator.pushReplacementNamed(context, AppRoutes.adminDashboard);
-        } else if (email.contains('head')) {
-          Navigator.pushReplacementNamed(context, AppRoutes.headDashboard);
-        } else {
-          Navigator.pushReplacementNamed(context, AppRoutes.facultyDashboard);
-        }
       }
-    });
+    }
+  }
+
+  Future<void> _onGoogleSignIn() async {
+    if (_isLoading || _isGoogleLoading) return;
+
+    setState(() => _isGoogleLoading = true);
+
+    try {
+      final user = await _authRepository.signInWithGoogle();
+
+      if (!mounted) return;
+
+      AppThemeState.instance.resetToLightMode();
+
+      final route = switch (user.role) {
+        AppStrings.roleFaculty => AppRoutes.facultyDashboard,
+        AppStrings.roleDeptHead => AppRoutes.headDashboard,
+        AppStrings.roleRegistrar => AppRoutes.registrarDashboard,
+        AppStrings.roleAdmin => AppRoutes.adminDashboard,
+        _ => null,
+      };
+
+      if (route != null) {
+        Navigator.pushReplacementNamed(context, route);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Invalid role assigned to this account.'),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+    } on AuthException catch (e) {
+      if (!mounted) return;
+
+      if (e.code == AuthErrorCode.googleSignInCancelled) {
+        // User voluntarily cancelled the picker
+        return;
+      }
+
+      if (e.code == AuthErrorCode.googleNoAccount) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: const Color(0xFF1B4332),
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Register',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const RegisterScreen()),
+                );
+              },
+            ),
+          ),
+        );
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const RegisterScreen()),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: const Color(0xFFDC2626),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Google Sign-In failed. Please try again.'),
+          backgroundColor: Color(0xFFDC2626),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isGoogleLoading = false);
+      }
+    }
   }
 
   @override
@@ -123,10 +254,12 @@ class _LoginScreenState extends State<LoginScreen>
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
                           const SizedBox(height: 0), // Top layout fixed
-
                           // ── LOGO (MOVED DOWN CLOSER TO WELCOME) ────────────
                           Transform.translate(
-                            offset: const Offset(0, 30), // Move ONLY logo down closer to Welcome
+                            offset: const Offset(
+                              0,
+                              30,
+                            ), // Move ONLY logo down closer to Welcome
                             child: Image.asset(
                               'assets/main_logo.png',
                               width: size.width * 0.70,
@@ -173,14 +306,22 @@ class _LoginScreenState extends State<LoginScreen>
                             keyboardType: TextInputType.emailAddress,
                             validator: (v) {
                               if (v == null || v.trim().isEmpty) {
-                                return 'Please enter your email or employee ID';
+                                return 'Please enter your email';
+                              }
+                              final regex = RegExp(
+                                r'^[\w.-]+@[\w-]+\.[a-z]{2,}$',
+                                caseSensitive: false,
+                              );
+                              if (!regex.hasMatch(v.trim())) {
+                                return 'Enter a valid email address.';
                               }
                               return null;
                             },
                           ),
 
-                          const SizedBox(height: 12), // 4. Email to Password gap
-
+                          const SizedBox(
+                            height: 12,
+                          ), // 4. Email to Password gap
                           // ── PASSWORD FIELD ─────────────────────────────────
                           _InputField(
                             controller: _passCtrl,
@@ -225,15 +366,18 @@ class _LoginScreenState extends State<LoginScreen>
                                       child: Checkbox(
                                         value: _rememberMe,
                                         onChanged: (v) => setState(
-                                            () => _rememberMe = v ?? false),
+                                          () => _rememberMe = v ?? false,
+                                        ),
                                         activeColor: const Color(0xFF1B4332),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius:
-                                              BorderRadius.circular(4),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
                                         ),
                                         side: const BorderSide(
-                                            color: Color(0xFF94A3B8),
-                                            width: 1.5),
+                                          color: Color(0xFF94A3B8),
+                                          width: 1.5,
+                                        ),
                                         materialTapTargetSize:
                                             MaterialTapTargetSize.shrinkWrap,
                                       ),
@@ -252,7 +396,10 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                               GestureDetector(
                                 onTap: () {
-                                  // TODO: navigate to forgot password
+                                  Navigator.pushNamed(
+                                    context,
+                                    AppRoutes.forgotPassword,
+                                  );
                                 },
                                 child: const Text(
                                   'Forgot Password?',
@@ -266,16 +413,15 @@ class _LoginScreenState extends State<LoginScreen>
                             ],
                           ),
 
-                          const SizedBox(height: 20), // 5. Checkbox to Login Button gap
-
+                          const SizedBox(
+                            height: 20,
+                          ), // 5. Checkbox to Login Button gap
                           // ── LOGIN BUTTON ───────────────────────────────────
-                          _LoginButton(
-                            isLoading: _isLoading,
-                            onTap: _onLogin,
-                          ),
+                          _LoginButton(isLoading: _isLoading, onTap: _onLogin),
 
-                          const SizedBox(height: 16), // 6. Login Button to OR Divider gap
-
+                          const SizedBox(
+                            height: 16,
+                          ), // 6. Login Button to OR Divider gap
                           // ── OR DIVIDER ─────────────────────────────────────
                           const Row(
                             children: [
@@ -310,9 +456,8 @@ class _LoginScreenState extends State<LoginScreen>
 
                           // ── GOOGLE SIGN-IN BUTTON ──────────────────────────
                           _GoogleSignInButton(
-                            onTap: () {
-                              // TODO: Google Sign-In logic
-                            },
+                            isLoading: _isGoogleLoading,
+                            onTap: _onGoogleSignIn,
                           ),
 
                           const SizedBox(height: 26),
@@ -416,8 +561,7 @@ class _InputField extends StatelessWidget {
                 child: suffixIcon,
               )
             : null,
-        suffixIconConstraints:
-            const BoxConstraints(minWidth: 0, minHeight: 0),
+        suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
         filled: true,
         fillColor: const Color(0xFFF1F5F9),
         contentPadding: const EdgeInsets.symmetric(
@@ -537,7 +681,8 @@ class _LoginButtonState extends State<_LoginButton>
 // ─────────────────────────────────────────────────────────────────────────────
 class _GoogleSignInButton extends StatefulWidget {
   final VoidCallback onTap;
-  const _GoogleSignInButton({required this.onTap});
+  final bool isLoading;
+  const _GoogleSignInButton({required this.onTap, this.isLoading = false});
 
   @override
   State<_GoogleSignInButton> createState() => _GoogleSignInButtonState();
@@ -565,7 +710,7 @@ class _GoogleSignInButtonState extends State<_GoogleSignInButton>
       onTapDown: (_) => _ctrl.reverse(),
       onTapUp: (_) {
         _ctrl.forward();
-        widget.onTap();
+        if (!widget.isLoading) widget.onTap();
       },
       onTapCancel: () => _ctrl.forward(),
       child: ScaleTransition(
@@ -576,37 +721,42 @@ class _GoogleSignInButtonState extends State<_GoogleSignInButton>
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: const Color(0xFFE2E8F0),
-              width: 1.2,
-            ),
+            border: Border.all(color: const Color(0xFFE2E8F0), width: 1.2),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Image.asset(
-                'assets/icons/google.png',
-                width: 22,
-                height: 22,
-                fit: BoxFit.contain,
-              ),
-              const SizedBox(width: 12),
-              Text(
-                'Continue with Google',
-                style: TextStyle(
-                  fontSize: 15.5,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF0F172A),
-                  letterSpacing: 0.2,
+          child: widget.isLoading
+              ? const Center(
+                  child: SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                      color: Color(0xFF1B4332),
+                      strokeWidth: 2.5,
+                    ),
+                  ),
+                )
+              : Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Image.asset(
+                      'assets/icons/google.png',
+                      width: 22,
+                      height: 22,
+                      fit: BoxFit.contain,
+                    ),
+                    const SizedBox(width: 12),
+                    const Text(
+                      'Continue with Google',
+                      style: TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF0F172A),
+                        letterSpacing: 0.2,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
       ),
     );
   }
 }
-
-
-

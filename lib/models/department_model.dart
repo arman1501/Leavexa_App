@@ -6,7 +6,7 @@ class DepartmentModel {
   final String id;
   final String name;
   final String shortCode;
-  final String headUid;   // UID of the department head
+  final String headUid; // UID of the department head
   final bool isActive;
 
   const DepartmentModel({

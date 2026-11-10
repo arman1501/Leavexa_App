@@ -5,22 +5,85 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../../core/constants/app_colors.dart';
+import 'package:intl/intl.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
+import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class HeadDashboard extends StatefulWidget {
-  const HeadDashboard({super.key});
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
+
+  const HeadDashboard({
+    super.key,
+    this.leaveRepository,
+    this.authRepository,
+  });
 
   @override
   State<HeadDashboard> createState() => _HeadDashboardState();
 }
 
 class _HeadDashboardState extends State<HeadDashboard> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+
   int _currentNavIndex = 0;
   String _selectedFilter = 'All';
+  bool _hasFetchedReal = false;
+  String _headName = 'Department Head';
+  String? _headPhotoUrl;
+  List<Map<String, dynamic>> _realPendingRequests = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadRealData();
+  }
+
+  Future<void> _loadRealData() async {
+    try {
+      final user = await _authRepo.getCurrentUserProfile();
+      final deptId = user?.departmentId ?? 'dept_cse';
+      final apps = await _leaveRepo.departmentPending(deptId);
+      if (mounted) {
+        setState(() {
+          if (user != null) {
+            _headName = user.fullName;
+            _headPhotoUrl = user.photoUrl;
+          }
+          _realPendingRequests = apps.map((a) {
+            final startStr = DateFormat('dd MMM').format(a.startDate);
+            final endStr = DateFormat('dd MMM').format(a.endDate);
+            return {
+              'id': a.id,
+              'applicantUid': a.applicantUid,
+              'facultyName': a.applicantName,
+              'designation': 'Faculty Member • ${a.departmentName}',
+              'leaveType': a.leaveTypeName,
+              'accentColor': const Color(0xFF16A34A),
+              'dateRange': '$startStr – $endStr',
+              'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
+              'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
+              'teachingCovered': 'Class coverage arranged',
+              'reason': a.reason,
+              'model': a,
+            };
+          }).toList();
+          _hasFetchedReal = true;
+        });
+      }
+    } catch (_) {}
+  }
+
+  List<Map<String, dynamic>> get _displayPendingRequests =>
+      _hasFetchedReal ? _realPendingRequests : _pendingRequests;
 
   final List<Map<String, dynamic>> _pendingRequests = [
     {
@@ -115,11 +178,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
   }
 
   void _onViewDetails(Map<String, dynamic> item) {
-    Navigator.pushNamed(
-      context,
-      AppRoutes.headRequestDetails,
-      arguments: item,
-    );
+    Navigator.pushNamed(context, AppRoutes.headRequestDetails, arguments: item);
   }
 
   @override
@@ -128,23 +187,29 @@ class _HeadDashboardState extends State<HeadDashboard> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor =
-            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+        final bgColor = isDark
+            ? const Color(0xFF0F172A)
+            : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor =
-            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
-        final textPrimary =
-            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-        final textSecondary =
-            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-        final primaryColor =
-            isDark ? const Color(0xFF34D399) : const Color(0xFF1B4332);
+        final borderColor = isDark
+            ? const Color(0xFF334155)
+            : const Color(0xFFE2E8F0);
+        final textPrimary = isDark
+            ? const Color(0xFFF8FAFC)
+            : const Color(0xFF0F172A);
+        final textSecondary = isDark
+            ? const Color(0xFF94A3B8)
+            : const Color(0xFF64748B);
+        final primaryColor = isDark
+            ? const Color(0xFF34D399)
+            : const Color(0xFF1B4332);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness:
-                isDark ? Brightness.light : Brightness.dark,
+            statusBarIconBrightness: isDark
+                ? Brightness.light
+                : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
@@ -152,7 +217,10 @@ class _HeadDashboardState extends State<HeadDashboard> {
             body: SafeArea(
               child: SingleChildScrollView(
                 physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 14,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -247,18 +315,17 @@ class _HeadDashboardState extends State<HeadDashboard> {
                             const SizedBox(width: 10),
                             // Profile Avatar button
                             GestureDetector(
-                              onTap: () =>
-                                  Navigator.pushNamed(context, AppRoutes.headProfile),
-                              child: Container(
-                                width: 40,
-                                height: 40,
-                                decoration: const BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  image: DecorationImage(
-                                    image: AssetImage('assets/images/profile.jpg'),
-                                    fit: BoxFit.cover,
-                                  ),
-                                ),
+                              onTap: () async {
+                                await Navigator.pushNamed(
+                                  context,
+                                  AppRoutes.headProfile,
+                                );
+                                _loadRealData();
+                              },
+                              child: AppAvatar(
+                                name: _headName,
+                                photoUrl: _headPhotoUrl,
+                                size: 40,
                               ),
                             ),
                           ],
@@ -298,7 +365,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                             borderRadius: BorderRadius.circular(20),
                             border: Border.all(
                               color: isDark
-                                  ? const Color(0xFF1E40AF).withValues(alpha: 0.5)
+                                  ? const Color(
+                                      0xFF1E40AF,
+                                    ).withValues(alpha: 0.5)
                                   : const Color(0xFFDBEAFE),
                             ),
                           ),
@@ -366,7 +435,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                             ),
                             decoration: BoxDecoration(
                               color: isDark
-                                  ? const Color(0xFF064E3B).withValues(alpha: 0.5)
+                                  ? const Color(
+                                      0xFF064E3B,
+                                    ).withValues(alpha: 0.5)
                                   : const Color(0xFFE8F5E9),
                               borderRadius: BorderRadius.circular(14),
                               border: Border.all(
@@ -394,9 +465,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  _pendingRequests.length < 10
-                                      ? '0${_pendingRequests.length}'
-                                      : '${_pendingRequests.length}',
+                                  _displayPendingRequests.length < 10
+                                      ? '0${_displayPendingRequests.length}'
+                                      : '${_displayPendingRequests.length}',
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
@@ -575,7 +646,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                   const SizedBox(width: 8),
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Row(
                                           children: [
@@ -714,14 +786,16 @@ class _HeadDashboardState extends State<HeadDashboard> {
                           _FilterChip(
                             label: 'All (8)',
                             isSelected: _selectedFilter == 'All',
-                            onTap: () => setState(() => _selectedFilter = 'All'),
+                            onTap: () =>
+                                setState(() => _selectedFilter = 'All'),
                             isDark: isDark,
                           ),
                           const SizedBox(width: 8),
                           _FilterChip(
                             label: 'Urgent (2)',
                             isSelected: _selectedFilter == 'Urgent',
-                            onTap: () => setState(() => _selectedFilter = 'Urgent'),
+                            onTap: () =>
+                                setState(() => _selectedFilter = 'Urgent'),
                             isDark: isDark,
                           ),
                           const SizedBox(width: 8),
@@ -736,7 +810,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                           _FilterChip(
                             label: 'Casual (5)',
                             isSelected: _selectedFilter == 'Casual',
-                            onTap: () => setState(() => _selectedFilter = 'Casual'),
+                            onTap: () =>
+                                setState(() => _selectedFilter = 'Casual'),
                             isDark: isDark,
                           ),
                         ],
@@ -773,7 +848,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text(
-                                '${_pendingRequests.length} Awaiting',
+                                '${_displayPendingRequests.length} Awaiting',
                                 style: const TextStyle(
                                   fontSize: 11.5,
                                   fontWeight: FontWeight.w700,
@@ -783,7 +858,12 @@ class _HeadDashboardState extends State<HeadDashboard> {
                             ),
                             const SizedBox(width: 8),
                             GestureDetector(
-                              onTap: () {},
+                              onTap: () {
+                                Navigator.pushNamed(
+                                  context,
+                                  AppRoutes.headRequests,
+                                );
+                              },
                               child: const Text(
                                 'View All',
                                 style: TextStyle(
@@ -801,7 +881,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                     const SizedBox(height: 14),
 
                     // ── 8. PENDING LEAVE CARDS LIST ──────────────────────────
-                    if (_pendingRequests.isEmpty)
+                    if (_displayPendingRequests.isEmpty)
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(24),
@@ -841,13 +921,14 @@ class _HeadDashboardState extends State<HeadDashboard> {
                       ListView.separated(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: _pendingRequests.length,
+                        itemCount: _displayPendingRequests.length,
                         separatorBuilder: (context, index) =>
                             const SizedBox(height: 14),
                         itemBuilder: (context, index) {
-                          final item = _pendingRequests[index];
+                          final item = _displayPendingRequests[index];
                           final accentColor =
-                              item['accentColor'] as Color? ?? const Color(0xFF16A34A);
+                              item['accentColor'] as Color? ??
+                              const Color(0xFF16A34A);
 
                           return Container(
                             clipBehavior: Clip.antiAlias,
@@ -861,10 +942,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 crossAxisAlignment: CrossAxisAlignment.stretch,
                                 children: [
                                   // Left Colored Accent Stripe
-                                  Container(
-                                    width: 4.5,
-                                    color: accentColor,
-                                  ),
+                                  Container(width: 4.5, color: accentColor),
                                   // Card Content Body
                                   Expanded(
                                     child: Padding(
@@ -886,7 +964,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                       CrossAxisAlignment.start,
                                                   children: [
                                                     Text(
-                                                      item['facultyName'] as String,
+                                                      item['facultyName']
+                                                          as String,
                                                       style: TextStyle(
                                                         fontSize: 15.5,
                                                         fontWeight:
@@ -897,7 +976,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                     ),
                                                     const SizedBox(height: 2),
                                                     Text(
-                                                      item['designation'] as String,
+                                                      item['designation']
+                                                          as String,
                                                       style: TextStyle(
                                                         fontSize: 12,
                                                         fontWeight:
@@ -912,13 +992,14 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                               Container(
                                                 padding:
                                                     const EdgeInsets.symmetric(
-                                                  horizontal: 10,
-                                                  vertical: 4,
-                                                ),
+                                                      horizontal: 10,
+                                                      vertical: 4,
+                                                    ),
                                                 decoration: BoxDecoration(
                                                   color: isDark
-                                                      ? const Color(0xFF1E3A8A)
-                                                          .withValues(alpha: 0.4)
+                                                      ? const Color(
+                                                          0xFF1E3A8A,
+                                                        ).withValues(alpha: 0.4)
                                                       : const Color(0xFFEFF6FF),
                                                   borderRadius:
                                                       BorderRadius.circular(8),
@@ -929,8 +1010,12 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                     fontSize: 11.5,
                                                     fontWeight: FontWeight.w700,
                                                     color: isDark
-                                                        ? const Color(0xFF93C5FD)
-                                                        : const Color(0xFF1E40AF),
+                                                        ? const Color(
+                                                            0xFF93C5FD,
+                                                          )
+                                                        : const Color(
+                                                            0xFF1E40AF,
+                                                          ),
                                                   ),
                                                 ),
                                               ),
@@ -954,7 +1039,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                             ),
                                             child: Row(
                                               mainAxisAlignment:
-                                                  MainAxisAlignment.spaceBetween,
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
                                               children: [
                                                 Row(
                                                   children: [
@@ -980,14 +1066,17 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                   Container(
                                                     padding:
                                                         const EdgeInsets.symmetric(
-                                                      horizontal: 8,
-                                                      vertical: 2,
-                                                    ),
+                                                          horizontal: 8,
+                                                          vertical: 2,
+                                                        ),
                                                     decoration: BoxDecoration(
-                                                      color:
-                                                          const Color(0xFF86EFAC),
+                                                      color: const Color(
+                                                        0xFF86EFAC,
+                                                      ),
                                                       borderRadius:
-                                                          BorderRadius.circular(4),
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
                                                     ),
                                                     child: const Text(
                                                       'Rx Attached',
@@ -995,7 +1084,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                         fontSize: 10.5,
                                                         fontWeight:
                                                             FontWeight.w800,
-                                                        color: Color(0xFF064E3B),
+                                                        color: Color(
+                                                          0xFF064E3B,
+                                                        ),
                                                       ),
                                                     ),
                                                   ),
@@ -1026,12 +1117,13 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                     ),
                                                     children: [
                                                       const TextSpan(
-                                                        text: 'Teaching Covered by: ',
+                                                        text:
+                                                            'Teaching Covered by: ',
                                                       ),
                                                       TextSpan(
-                                                        text: item[
-                                                                'teachingCovered']
-                                                            as String,
+                                                        text:
+                                                            item['teachingCovered']
+                                                                as String,
                                                         style: TextStyle(
                                                           fontWeight:
                                                               FontWeight.w700,
@@ -1067,20 +1159,21 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                   onPressed: () =>
                                                       _onViewDetails(item),
                                                   style: OutlinedButton.styleFrom(
-                                                    foregroundColor: textPrimary,
+                                                    foregroundColor:
+                                                        textPrimary,
                                                     side: BorderSide(
                                                       color: borderColor,
                                                     ),
                                                     shape: RoundedRectangleBorder(
                                                       borderRadius:
                                                           BorderRadius.circular(
-                                                        10,
-                                                      ),
+                                                            10,
+                                                          ),
                                                     ),
                                                     padding:
                                                         const EdgeInsets.symmetric(
-                                                      vertical: 12,
-                                                    ),
+                                                          vertical: 12,
+                                                        ),
                                                   ),
                                                   child: const Text(
                                                     'View Details',
@@ -1099,24 +1192,30 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                                       _onEndorseRequest(index),
                                                   style: ElevatedButton.styleFrom(
                                                     backgroundColor: isDark
-                                                        ? const Color(0xFF047857)
-                                                        : const Color(0xFF1B4332),
-                                                    foregroundColor: Colors.white,
+                                                        ? const Color(
+                                                            0xFF047857,
+                                                          )
+                                                        : const Color(
+                                                            0xFF1B4332,
+                                                          ),
+                                                    foregroundColor:
+                                                        Colors.white,
                                                     elevation: 0,
                                                     shape: RoundedRectangleBorder(
                                                       borderRadius:
                                                           BorderRadius.circular(
-                                                        10,
-                                                      ),
+                                                            10,
+                                                          ),
                                                     ),
                                                     padding:
                                                         const EdgeInsets.symmetric(
-                                                      vertical: 12,
-                                                    ),
+                                                          vertical: 12,
+                                                        ),
                                                   ),
                                                   child: const Row(
                                                     mainAxisAlignment:
-                                                        MainAxisAlignment.center,
+                                                        MainAxisAlignment
+                                                            .center,
                                                     children: [
                                                       Text(
                                                         'Review & Endorse',
@@ -1206,11 +1305,11 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                   shape: BoxShape.circle,
                                   color: isApproved
                                       ? (isDark
-                                          ? const Color(0xFF064E3B)
-                                          : const Color(0xFFDCFCE7))
+                                            ? const Color(0xFF064E3B)
+                                            : const Color(0xFFDCFCE7))
                                       : (isDark
-                                          ? const Color(0xFF334155)
-                                          : const Color(0xFFF1F5F9)),
+                                            ? const Color(0xFF334155)
+                                            : const Color(0xFFF1F5F9)),
                                 ),
                                 child: Icon(
                                   isApproved
@@ -1254,12 +1353,13 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 decoration: BoxDecoration(
                                   color: isApproved
                                       ? (isDark
-                                          ? const Color(0xFF064E3B)
-                                          : const Color(0xFFDCFCE7))
+                                            ? const Color(0xFF064E3B)
+                                            : const Color(0xFFDCFCE7))
                                       : (isDark
-                                          ? const Color(0xFF1E3A8A)
-                                              .withValues(alpha: 0.4)
-                                          : const Color(0xFFEFF6FF)),
+                                            ? const Color(
+                                                0xFF1E3A8A,
+                                              ).withValues(alpha: 0.4)
+                                            : const Color(0xFFEFF6FF)),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
@@ -1270,8 +1370,8 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                     color: isApproved
                                         ? const Color(0xFF16A34A)
                                         : (isDark
-                                            ? const Color(0xFF93C5FD)
-                                            : const Color(0xFF1E40AF)),
+                                              ? const Color(0xFF93C5FD)
+                                              : const Color(0xFF1E40AF)),
                                   ),
                                 ),
                               ),
@@ -1316,15 +1416,17 @@ class _FilterChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeBg =
-        isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
-    final inactiveBg =
-        isDark ? const Color(0xFF1E3A8A).withValues(alpha: 0.3) : const Color(0xFFEFF6FF);
-    final inactiveBorder =
-        isDark ? const Color(0xFF1E40AF).withValues(alpha: 0.5) : const Color(0xFFDBEAFE);
+    final activeBg = isDark ? const Color(0xFF047857) : const Color(0xFF1B4332);
+    final inactiveBg = isDark
+        ? const Color(0xFF1E3A8A).withValues(alpha: 0.3)
+        : const Color(0xFFEFF6FF);
+    final inactiveBorder = isDark
+        ? const Color(0xFF1E40AF).withValues(alpha: 0.5)
+        : const Color(0xFFDBEAFE);
     final activeText = Colors.white;
-    final inactiveText =
-        isDark ? const Color(0xFF93C5FD) : const Color(0xFF1E40AF);
+    final inactiveText = isDark
+        ? const Color(0xFF93C5FD)
+        : const Color(0xFF1E40AF);
 
     return GestureDetector(
       onTap: onTap,
@@ -1344,152 +1446,6 @@ class _FilterChip extends StatelessWidget {
             color: isSelected ? activeText : inactiveText,
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Request Detail Bottom Sheet
-// ─────────────────────────────────────────────────────────────────────────────
-class _RequestDetailBottomSheet extends StatelessWidget {
-  final Map<String, dynamic> item;
-
-  const _RequestDetailBottomSheet({required this.item});
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final bgColor = isDark ? const Color(0xFF1E293B) : Colors.white;
-    final textPrimary = isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
-    final textSecondary = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: isDark ? const Color(0xFF475569) : const Color(0xFFE2E8F0),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            'Leave Endorsement Details',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w800,
-              color: textPrimary,
-            ),
-          ),
-          const SizedBox(height: 16),
-          _DetailRow(
-            label: 'Faculty Member',
-            value: item['facultyName'] as String,
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          _DetailRow(
-            label: 'Designation',
-            value: item['designation'] as String,
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          _DetailRow(
-            label: 'Leave Type',
-            value: item['leaveType'] as String,
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          _DetailRow(
-            label: 'Duration',
-            value: '${item['dateRange']} (${item['duration']})',
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          _DetailRow(
-            label: 'Teaching Covered',
-            value: item['teachingCovered'] as String,
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          _DetailRow(
-            label: 'Reason',
-            value: item['reason'] as String,
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-          ),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF1B4332),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-              ),
-              child: const Text('Close'),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color textPrimary;
-  final Color textSecondary;
-
-  const _DetailRow({
-    required this.label,
-    required this.value,
-    required this.textPrimary,
-    required this.textSecondary,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11.5,
-              fontWeight: FontWeight.w600,
-              color: textSecondary,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w700,
-              color: textPrimary,
-            ),
-          ),
-        ],
       ),
     );
   }

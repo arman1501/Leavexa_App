@@ -4,8 +4,8 @@
 
 class LeaveTypeModel {
   final String id;
-  final String name;          // e.g. 'Casual Leave'
-  final String code;          // e.g. 'CL'
+  final String name; // e.g. 'Casual Leave'
+  final String code; // e.g. 'CL'
   final int defaultDays;
   final bool requiresDocument;
   final bool isActive;
@@ -41,34 +41,64 @@ class LeaveTypeModel {
 
   static List<LeaveTypeModel> get defaultLeaveTypes => const [
     LeaveTypeModel(
-      id: 'casual_leave',
+      id: 'casual',
       name: 'Casual Leave',
       code: 'CL',
       defaultDays: 10,
     ),
     LeaveTypeModel(
-      id: 'duty_leave',
+      id: 'medical',
+      name: 'Medical Leave',
+      code: 'ML',
+      defaultDays: 14,
+      requiresDocument: true,
+    ),
+    LeaveTypeModel(
+      id: 'earned',
+      name: 'Earned Leave',
+      code: 'EL',
+      defaultDays: 30,
+    ),
+    LeaveTypeModel(
+      id: 'duty',
       name: 'Duty Leave',
       code: 'DL',
       defaultDays: 14,
     ),
     LeaveTypeModel(
-      id: 'station_leave',
+      id: 'station',
       name: 'Station Leave',
       code: 'STL',
       defaultDays: 5,
     ),
     LeaveTypeModel(
-      id: 'study_leave',
+      id: 'study',
       name: 'Study Leave',
       code: 'SL',
       defaultDays: 30,
-    ),
-    LeaveTypeModel(
-      id: 'others',
-      name: 'Others',
-      code: 'OTH',
-      defaultDays: 7,
+      requiresDocument: true,
     ),
   ];
+
+  /// Normalizes legacy aliases ('casual_leave', 'sick', 'sick_leave') to canonical IDs.
+  static String normalizeId(String rawId) {
+    switch (rawId.trim().toLowerCase()) {
+      case 'sick':
+      case 'sick_leave':
+      case 'medical_leave':
+        return 'medical';
+      case 'casual_leave':
+        return 'casual';
+      case 'duty_leave':
+        return 'duty';
+      case 'station_leave':
+        return 'station';
+      case 'study_leave':
+        return 'study';
+      case 'earned_leave':
+        return 'earned';
+      default:
+        return rawId.trim().toLowerCase();
+    }
+  }
 }

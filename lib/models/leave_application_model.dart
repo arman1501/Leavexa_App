@@ -18,7 +18,7 @@ class LeaveApplicationModel {
   final String? documentUrl;
 
   // Approval flow
-  final String status;           // pending | forwarded | approved | rejected
+  final String status; // pending | forwarded | approved | rejected
   final String? headComment;
   final DateTime? headActionAt;
   final String? headUid;
@@ -26,6 +26,10 @@ class LeaveApplicationModel {
   final String? registrarComment;
   final DateTime? registrarActionAt;
   final String? registrarUid;
+
+  // Cancellation flow
+  final DateTime? cancelledAt;
+  final String? cancelReason;
 
   final DateTime appliedAt;
 
@@ -50,6 +54,8 @@ class LeaveApplicationModel {
     this.registrarComment,
     this.registrarActionAt,
     this.registrarUid,
+    this.cancelledAt,
+    this.cancelReason,
     required this.appliedAt,
   });
 
@@ -79,6 +85,10 @@ class LeaveApplicationModel {
           ? DateTime.parse(map['registrarActionAt'] as String)
           : null,
       registrarUid: map['registrarUid'] as String?,
+      cancelledAt: map['cancelledAt'] != null
+          ? DateTime.parse(map['cancelledAt'] as String)
+          : null,
+      cancelReason: map['cancelReason'] as String?,
       appliedAt: DateTime.parse(map['appliedAt'] as String),
     );
   }
@@ -104,6 +114,8 @@ class LeaveApplicationModel {
     'registrarComment': registrarComment,
     'registrarActionAt': registrarActionAt?.toIso8601String(),
     'registrarUid': registrarUid,
+    'cancelledAt': cancelledAt?.toIso8601String(),
+    'cancelReason': cancelReason,
     'appliedAt': appliedAt.toIso8601String(),
   };
 
@@ -115,6 +127,8 @@ class LeaveApplicationModel {
     String? registrarComment,
     DateTime? registrarActionAt,
     String? registrarUid,
+    DateTime? cancelledAt,
+    String? cancelReason,
   }) {
     return LeaveApplicationModel(
       id: id,
@@ -137,7 +151,15 @@ class LeaveApplicationModel {
       registrarComment: registrarComment ?? this.registrarComment,
       registrarActionAt: registrarActionAt ?? this.registrarActionAt,
       registrarUid: registrarUid ?? this.registrarUid,
+      cancelledAt: cancelledAt ?? this.cancelledAt,
+      cancelReason: cancelReason ?? this.cancelReason,
       appliedAt: appliedAt,
     );
   }
+
+  bool get isPending => status == 'pending';
+  bool get isForwarded => status == 'forwarded';
+  bool get isApproved => status == 'approved';
+  bool get isRejected => status == 'rejected';
+  bool get isCancelled => status == 'cancelled';
 }
