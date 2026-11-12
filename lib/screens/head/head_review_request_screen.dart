@@ -66,6 +66,19 @@ class _HeadReviewRequestScreenState extends State<HeadReviewRequestScreen> {
     try {
       final headUser = await _authRepo.getCurrentUserProfile();
       final headUid = headUser?.uid ?? _authRepo.currentUserId ?? 'head_uid';
+      final headDeptId = headUser?.departmentId.trim() ?? '';
+      final model = args['model'] as LeaveApplicationModel?;
+      final appDeptId =
+          (model?.departmentId ?? (args['departmentId'] as String? ?? '')).trim();
+
+      if (headUser != null &&
+          headDeptId.isNotEmpty &&
+          appDeptId.isNotEmpty &&
+          headDeptId != appDeptId) {
+        throw Exception(
+          'Cross-department action denied: application belongs to another department.',
+        );
+      }
 
       if (appId.isNotEmpty) {
         if (_selectedDecision == _ReviewDecision.approve) {

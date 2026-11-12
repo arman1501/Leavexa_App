@@ -8,13 +8,15 @@ import '../core/constants/app_colors.dart';
 class AppBottomNavigation extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
-  final String role; // 'faculty' | 'department_head' | 'registrar'
+  final String role; // 'faculty' | 'department_head' | 'registrar' | 'admin'
+  final int? adminApprovalBadgeCount;
 
   const AppBottomNavigation({
     super.key,
     required this.currentIndex,
     required this.onTap,
     required this.role,
+    this.adminApprovalBadgeCount,
   });
 
   List<BottomNavigationBarItem> get _items {
@@ -43,29 +45,43 @@ class AppBottomNavigation extends StatelessWidget {
           ),
         ];
       case 'admin':
+        final badgeCount = adminApprovalBadgeCount;
+        final showBadge = badgeCount != null && badgeCount > 0;
+        final badgeText = badgeCount != null ? '$badgeCount' : '';
+
         return [
           const BottomNavigationBarItem(
             icon: Icon(Icons.grid_view_rounded),
             activeIcon: Icon(Icons.grid_view_rounded),
             label: 'Home',
           ),
-          const BottomNavigationBarItem(
-            icon: Badge(
-              label: Text(
-                '12',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
-              ),
-              backgroundColor: Color(0xFFDC2626),
-              child: Icon(Icons.assignment_outlined),
-            ),
-            activeIcon: Badge(
-              label: Text(
-                '12',
-                style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700),
-              ),
-              backgroundColor: Color(0xFFDC2626),
-              child: Icon(Icons.assignment_rounded),
-            ),
+          BottomNavigationBarItem(
+            icon: showBadge
+                ? Badge(
+                    label: Text(
+                      badgeText,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    backgroundColor: const Color(0xFFDC2626),
+                    child: const Icon(Icons.assignment_outlined),
+                  )
+                : const Icon(Icons.assignment_outlined),
+            activeIcon: showBadge
+                ? Badge(
+                    label: Text(
+                      badgeText,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    backgroundColor: const Color(0xFFDC2626),
+                    child: const Icon(Icons.assignment_rounded),
+                  )
+                : const Icon(Icons.assignment_rounded),
             label: 'Approvals',
           ),
           const BottomNavigationBarItem(

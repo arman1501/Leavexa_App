@@ -2,6 +2,8 @@
 //  app_avatar.dart  –  Clean circular avatar with initials fallback
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/helpers.dart';
@@ -79,6 +81,40 @@ class AppAvatar extends StatelessWidget {
         ? BorderRadius.circular(size / 2)
         : (borderRadius ?? BorderRadius.circular(8));
 
+    Widget imageWidget;
+    if (url.startsWith('data:image/')) {
+      final commaIdx = url.indexOf(',');
+      Uint8List? bytes;
+      if (commaIdx != -1 && commaIdx + 1 < url.length) {
+        try {
+          bytes = base64Decode(url.substring(commaIdx + 1));
+        } catch (_) {}
+      }
+      if (bytes == null || bytes.isEmpty) {
+        return _buildInitials(context);
+      }
+      imageWidget = Image.memory(
+        bytes,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        gaplessPlayback: true,
+        errorBuilder: (context, error, stackTrace) => _buildInitials(context),
+      );
+    } else {
+      imageWidget = Image.network(
+        url,
+        width: size,
+        height: size,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) => _buildInitials(context),
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return _buildInitials(context);
+        },
+      );
+    }
+
     return Container(
       width: size,
       height: size,
@@ -89,17 +125,7 @@ class AppAvatar extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: effectiveRadius,
-        child: Image.network(
-          url,
-          width: size,
-          height: size,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => _buildInitials(context),
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
-            return _buildInitials(context);
-          },
-        ),
+        child: imageWidget,
       ),
     );
   }

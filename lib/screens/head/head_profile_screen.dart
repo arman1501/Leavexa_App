@@ -4,15 +4,18 @@
 //  administrative contacts, office consultation hours & secure logout.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
 import '../../models/faculty_profile_state.dart';
 import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
 import '../../repositories/user_repository.dart';
 import '../../services/storage_service.dart';
 import '../../widgets/app_avatar.dart';
@@ -20,8 +23,17 @@ import '../../widgets/app_bottom_navigation.dart';
 
 class HeadProfileScreen extends StatefulWidget {
   final AuthRepository? authRepository;
+  final UserRepository? userRepository;
+  final LeaveRepository? leaveRepository;
+  final StorageService? storageService;
 
-  const HeadProfileScreen({super.key, this.authRepository});
+  const HeadProfileScreen({
+    super.key,
+    this.authRepository,
+    this.userRepository,
+    this.leaveRepository,
+    this.storageService,
+  });
 
   @override
   State<HeadProfileScreen> createState() => _HeadProfileScreenState();
@@ -30,23 +42,30 @@ class HeadProfileScreen extends StatefulWidget {
 class _HeadProfileScreenState extends State<HeadProfileScreen> {
   late final AuthRepository _authRepository =
       widget.authRepository ?? AuthRepository();
-  late final StorageService _storageService = StorageService();
-  late final UserRepository _userRepo = UserRepository();
+  late final StorageService _storageService =
+      widget.storageService ?? StorageService();
+  late final UserRepository _userRepo =
+      widget.userRepository ?? UserRepository();
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
   bool _isLoggingOut = false;
   bool _isUploadingPhoto = false;
   String? _photoUrl;
   final int _currentNavIndex = 3; // 3: Profile tab active
 
   // Department Head specific profile state
-  String _fullName = 'Prof. Dr. Tariqul Islam';
-  String _email = 'head.cse@leavexa.edu';
-  String _phone = '+880 1711-987654';
-  String _office = 'Room 501, Head Office, Academic Bldg 1';
-  final String _employeeId = 'EMP-H1005';
-  final String _department = 'Computer Science & Engineering';
-  final String _designation = 'Professor & Head of Department';
+  String _fullName = 'Department Head';
+  String _email = 'head@leavexa.edu';
+  String _phone = 'Not provided';
+  String _office = 'Head of Department Office';
+  String _employeeId = 'HEAD';
+  String _department = 'Academic Department';
+  String _designation = 'Department Head';
+  int _facultyCount = 0;
+  int _pendingRequestsCount = 0;
+  int _reviewedRequestsCount = 0;
   final String _officeHours = 'Sun – Thu, 10:00 AM – 04:00 PM';
-  final String _appointedDate = 'January 2024';
+  final String _appointedDate = 'Active Term';
 
   @override
   void initState() {
@@ -58,14 +77,42 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
     try {
       final user = await _authRepository.getCurrentUserProfile();
       if (user != null && mounted) {
+        final deptId = user.departmentId.trim();
+        final deptName = user.departmentName.trim().isNotEmpty
+            ? user.departmentName.trim()
+            : (AppConstants.departmentIdToCanonicalName[deptId] ?? deptId);
         setState(() {
           _fullName = user.fullName;
           _email = user.email;
           _photoUrl = user.photoUrl;
-          if (user.phone != null && user.phone!.isNotEmpty) {
-            _phone = user.phone!;
-          }
+          _department = deptName.isNotEmpty ? deptName : _department;
+          _designation = user.designation.trim().isNotEmpty
+              ? user.designation.trim()
+              : _designation;
+          _employeeId = user.employeeId.trim().isNotEmpty
+              ? user.employeeId.trim()
+              : _employeeId;
+          _phone = (user.phone != null && user.phone!.trim().isNotEmpty)
+              ? user.phone!.trim()
+              : 'Not provided';
+          _office = '$deptName Office';
         });
+
+        if (deptId.isNotEmpty) {
+          try {
+            final deptUsers = await _userRepo.getFacultyByDepartment(deptId);
+            final apps = await _leaveRepo.departmentApplications(deptId);
+            if (mounted) {
+              setState(() {
+                _facultyCount = deptUsers
+                    .where((u) => u.isFaculty && u.isActiveAndApproved && UserRepository.isGenuineUser(u))
+                    .length;
+                _pendingRequestsCount = apps.where((a) => a.isPending).length;
+                _reviewedRequestsCount = apps.where((a) => !a.isPending).length;
+              });
+            }
+          } catch (_) {}
+        }
       }
     } catch (_) {}
   }
@@ -76,7 +123,9 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
       final picker = ImagePicker();
       final picked = await picker.pickImage(
         source: ImageSource.gallery,
-        imageQuality: 85,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 75,
       );
       if (picked == null) return;
 
@@ -98,17 +147,41 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
 
       setState(() => _isUploadingPhoto = true);
 
-      final downloadUrl = await _storageService.uploadProfileImage(
-        uid: uid,
-        file: file,
-        previousPhotoUrl: _photoUrl,
-      );
+      final realMime = await StorageService.detectRealMimeType(file);
+      if (!realMime.startsWith('image/')) {
+        throw const StorageValidationException(
+          'Selected file is not a supported image (JPG, PNG, WEBP).',
+        );
+      }
 
-      await _userRepo.updateUser(uid, {'photoUrl': downloadUrl});
+      String nextPhotoUrl;
+      try {
+        nextPhotoUrl = await _storageService
+            .uploadProfileImage(
+              uid: uid,
+              file: file,
+              previousPhotoUrl: _photoUrl,
+            )
+            .timeout(const Duration(seconds: 8));
+      } catch (_) {
+        final bytes = await file.readAsBytes();
+        if (bytes.length > 500 * 1024) {
+          throw const StorageValidationException(
+            'Image is too large after compression. Please select a smaller image.',
+          );
+        }
+        nextPhotoUrl = 'data:$realMime;base64,${base64Encode(bytes)}';
+      }
+
+      await _userRepo.updateUser(uid, {'photoUrl': nextPhotoUrl});
+      if (AuthRepository.activeUser != null) {
+        AuthRepository.activeUser =
+            AuthRepository.activeUser!.copyWith(photoUrl: nextPhotoUrl);
+      }
 
       if (mounted) {
         setState(() {
-          _photoUrl = downloadUrl;
+          _photoUrl = nextPhotoUrl;
           _isUploadingPhoto = false;
         });
         AppHelpers.showSuccess(context, 'Profile photo updated successfully!');
@@ -158,9 +231,11 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
 
     try {
       final oldUrl = _photoUrl;
-      if (oldUrl != null && oldUrl.isNotEmpty) {
+      if (oldUrl != null && oldUrl.isNotEmpty && oldUrl.startsWith('http')) {
         try {
-          await _storageService.deleteByUrl(oldUrl);
+          await _storageService
+              .deleteByUrl(oldUrl)
+              .timeout(const Duration(seconds: 5));
         } catch (_) {}
       }
 
@@ -331,14 +406,16 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
                     setState(() => _isLoggingOut = true);
                     try {
                       await _authRepository.logout();
-                      AppThemeState.instance.resetToLightMode();
                       FacultyProfileState.instance.reset();
                       if (mounted) {
-                        Navigator.pushNamedAndRemoveUntil(
-                          context,
+                        Navigator.of(context, rootNavigator: true)
+                            .pushNamedAndRemoveUntil(
                           AppRoutes.login,
                           (route) => false,
                         );
+                        WidgetsBinding.instance.addPostFrameCallback((_) {
+                          AppThemeState.instance.resetToLightMode();
+                        });
                       }
                     } catch (e) {
                       if (mounted) {
@@ -770,7 +847,7 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             label: 'Faculty',
-                            value: '18',
+                            value: '$_facultyCount',
                             color: const Color(0xFF16A34A),
                             icon: Icons.groups_outlined,
                           ),
@@ -783,7 +860,7 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                             label: 'Pending Requests',
-                            value: '6',
+                            value: '$_pendingRequestsCount',
                             color: const Color(0xFFD97706),
                             icon: Icons.pending_actions_rounded,
                           ),
@@ -795,10 +872,10 @@ class _HeadProfileScreenState extends State<HeadProfileScreen> {
                             borderColor: borderColor,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
-                            label: 'Courses',
-                            value: '32',
+                            label: 'Reviewed',
+                            value: '$_reviewedRequestsCount',
                             color: const Color(0xFF2563EB),
-                            icon: Icons.menu_book_rounded,
+                            icon: Icons.task_alt_rounded,
                           ),
                         ),
                       ],

@@ -2,17 +2,45 @@
 //  leave_service.dart  –  Leave Application Business Logic
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'package:firebase_core/firebase_core.dart';
 import '../models/leave_application_model.dart';
 import '../core/constants/app_constants.dart';
+import 'cloud_functions_service.dart';
 import 'firestore_service.dart';
 
 class LeaveService {
-  final FirestoreService _firestore;
-  LeaveService({FirestoreService? firestore})
-    : _firestore = firestore ?? FirestoreService();
+  final FirestoreService? _injectedFirestore;
+  final CloudFunctionsService? _injectedFunctions;
+
+  FirestoreService get _firestore => _injectedFirestore ?? FirestoreService();
+
+  LeaveService({
+    FirestoreService? firestore,
+    CloudFunctionsService? cloudFunctions,
+  })  : _injectedFirestore = firestore,
+        _injectedFunctions = cloudFunctions;
 
   /// Submit a new leave application.
+  /// Uses the trusted `submitLeaveApplication` Cloud Function when Firebase is active
+  /// so `departmentId`, `applicantUid`, and faculty status are strictly derived server-side.
   Future<String> submitApplication(LeaveApplicationModel application) async {
+    final canUseCloudFunctions = _injectedFunctions != null ||
+        (_injectedFirestore == null && Firebase.apps.isNotEmpty);
+    if (canUseCloudFunctions) {
+      final cf = _injectedFunctions ?? CloudFunctionsService();
+      final res = await cf.submitLeaveApplication(
+        applicationId: application.id.trim().isNotEmpty ? application.id : null,
+        leaveTypeId: application.leaveTypeId,
+        leaveTypeName: application.leaveTypeName,
+        startDate: application.startDate,
+        endDate: application.endDate,
+        totalDays: application.totalDays,
+        reason: application.reason,
+        documentUrl: application.documentUrl,
+      );
+      return (res['applicationId'] ?? '').toString();
+    }
+
     final id = await _firestore.addDocument(
       AppConstants.applicationsCollection,
       application.toMap(),
@@ -165,6 +193,62 @@ class LeaveService {
           apps.sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
           return apps;
         });
+  }
+
+  /// Fetch ALL applications belonging exclusively to a single department (head console).
+  Future<List<LeaveApplicationModel>> getApplicationsByDepartment(
+    String departmentId,
+  ) async {
+    if (departmentId.trim().isEmpty) return [];
+    final data = await _firestore.queryCollection(
+      AppConstants.applicationsCollection,
+      isEqualTo: {'departmentId': departmentId},
+    );
+    final apps = data.map((m) => LeaveApplicationModel.fromMap(m)).toList();
+    apps.sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    return apps;
+  }
+
+  /// Real-time stream of ALL applications belonging exclusively to a single department.
+  Stream<List<LeaveApplicationModel>> streamApplicationsByDepartment(
+    String departmentId,
+  ) {
+    if (departmentId.trim().isEmpty) return Stream.value([]);
+    return _firestore
+        .streamCollection(
+          AppConstants.applicationsCollection,
+          isEqualTo: {'departmentId': departmentId},
+        )
+        .map((list) {
+          final apps =
+              list.map((m) => LeaveApplicationModel.fromMap(m)).toList();
+          apps.sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+          return apps;
+        });
+  }
+
+  /// Fetch reviewed/forwarded applications visible to Registrar (excludes pending drafts).
+  Future<List<LeaveApplicationModel>> getRegistrarApplications() async {
+    final results = await Future.wait([
+      _firestore.queryCollection(
+        AppConstants.applicationsCollection,
+        isEqualTo: {'status': 'forwarded'},
+      ),
+      _firestore.queryCollection(
+        AppConstants.applicationsCollection,
+        isEqualTo: {'status': 'approved'},
+      ),
+      _firestore.queryCollection(
+        AppConstants.applicationsCollection,
+        isEqualTo: {'status': 'rejected'},
+      ),
+    ]);
+    final combined = <LeaveApplicationModel>[
+      for (final group in results)
+        ...group.map((m) => LeaveApplicationModel.fromMap(m)),
+    ];
+    combined.sort((a, b) => b.appliedAt.compareTo(a.appliedAt));
+    return combined;
   }
 
   /// Fetch all forwarded applications (registrar view).

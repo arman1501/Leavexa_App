@@ -620,6 +620,8 @@ async function sendPushNotificationToDepartmentHead(departmentId, payload, optio
 
   const results = [];
   for (const doc of headsSnap.docs) {
+    const data = doc.data() || {};
+    if (data.approvalStatus && data.approvalStatus !== 'approved') continue;
     const res = await sendPushNotificationToUser(doc.id, payload, {
       ...options,
       idempotencyKey: options.idempotencyKey
@@ -643,6 +645,8 @@ async function sendPushNotificationToRegistrars(payload, options = {}) {
 
   const results = [];
   for (const doc of registrarsSnap.docs) {
+    const data = doc.data() || {};
+    if (data.approvalStatus && data.approvalStatus !== 'approved') continue;
     const res = await sendPushNotificationToUser(doc.id, payload, {
       ...options,
       idempotencyKey: options.idempotencyKey
@@ -666,6 +670,8 @@ async function sendPushNotificationToAdmins(payload, options = {}) {
 
   const results = [];
   for (const doc of adminsSnap.docs) {
+    const data = doc.data() || {};
+    if (data.approvalStatus && data.approvalStatus !== 'approved') continue;
     const res = await sendPushNotificationToUser(doc.id, payload, {
       ...options,
       idempotencyKey: options.idempotencyKey

@@ -42,16 +42,49 @@ service cloud.firestore {
           : (userDocExists() ? getUserDoc().role : null);
     }
 
+    function isAuthorizedInstitutionalEmail(email, role, deptId) {
+      return (role == 'admin' && email == 'admin.lu@gmail.com') ||
+             (role == 'registrar' && email == 'registrar.lu@gmail.com') ||
+             (role == 'department_head' && (
+               (email == 'head.cse.lu@gmail.com' && deptId == 'dept_cse') ||
+               (email == 'head.eee.lu@gmail.com' && deptId == 'dept_eee') ||
+               (email == 'head.bba.lu@gmail.com' && deptId == 'dept_bba') ||
+               (email == 'head.ce.lu@gmail.com' && deptId == 'dept_civil') ||
+               (email == 'head.law.lu@gmail.com' && deptId == 'dept_law') ||
+               (email == 'head.arch.lu@gmail.com' && deptId == 'dept_arch') ||
+               (email == 'head.ph.lu@gmail.com' && deptId == 'dept_public_health') ||
+               (email == 'head.thm.lu@gmail.com' && deptId == 'dept_thm') ||
+               (email == 'head.islamic.lu@gmail.com' && deptId == 'dept_islamic_studies') ||
+               (email == 'head.english.lu@gmail.com' && deptId == 'dept_english')
+             ));
+    }
+
+    function hasValidTokenEmailForRole(role, deptId) {
+      return (!request.auth.token.keys().hasAny(['email']) ||
+              (request.auth.token.email is string &&
+               isAuthorizedInstitutionalEmail(request.auth.token.email, role, deptId))) &&
+             (!userDocExists() ||
+              !getUserDoc().keys().hasAny(['email']) ||
+              (getUserDoc().email is string &&
+               isAuthorizedInstitutionalEmail(getUserDoc().email, role, deptId)));
+    }
+
     function isAdmin() {
-      return isAuthenticated() && getRole() == 'admin';
+      return isAuthenticated() &&
+             getRole() == 'admin' &&
+             hasValidTokenEmailForRole('admin', 'admin_office');
     }
 
     function isRegistrar() {
-      return isAuthenticated() && (getRole() == 'registrar' || isAdmin());
+      return isAuthenticated() &&
+             ((getRole() == 'registrar' && hasValidTokenEmailForRole('registrar', 'registrar_office')) ||
+              isAdmin());
     }
 
     function isDeptHead() {
-      return isAuthenticated() && (getRole() == 'department_head' || isAdmin());
+      return isAuthenticated() &&
+             ((getRole() == 'department_head' && hasValidTokenEmailForRole('department_head', getUserDepartmentId())) ||
+              isAdmin());
     }
 
     function isFaculty() {
@@ -69,7 +102,31 @@ service cloud.firestore {
     }
 
     function getUserDepartmentId() {
-      return userDocExists() ? getUserDoc().departmentId : null;
+      return (userDocExists() &&
+              getUserDoc().departmentId is string &&
+              getUserDoc().departmentId.size() > 0)
+          ? getUserDoc().departmentId
+          : null;
+    }
+
+    function isConsistentDeptHead() {
+      return isAuthenticated() &&
+             userDocExists() &&
+             getUserDoc().role == 'department_head' &&
+             getUserDoc().isActive == true &&
+             getUserDoc().departmentId is string &&
+             getUserDoc().departmentId.size() > 0 &&
+             hasValidTokenEmailForRole('department_head', getUserDoc().departmentId) &&
+             (
+               !request.auth.token.keys().hasAny(['role', 'departmentId']) ||
+               (
+                 request.auth.token.role == 'department_head' &&
+                 request.auth.token.keys().hasAll(['departmentId']) &&
+                 request.auth.token.departmentId is string &&
+                 request.auth.token.departmentId.size() > 0 &&
+                 request.auth.token.departmentId == getUserDoc().departmentId
+               )
+             );
     }
 
     // ═════════════════════════════════════════════════════════════════════════
@@ -80,14 +137,15 @@ service cloud.firestore {
       // Read access:
       // - Users can read their own profile.
       // - Admin and Registrar can read any profile for verifications.
-      // - Department Heads can read profiles in their own department.
+      // - Department Heads can read profiles in their own department (with consistent claims).
       allow read: if isOwner(uid) ||
                      isRegistrar() ||
-                     (isDeptHead() && resource.data.departmentId == getUserDepartmentId());
+                     (isConsistentDeptHead() && resource.data.departmentId == getUserDepartmentId());
 
       // Registration:
       // - Self-registration is restricted strictly to 'faculty', 'pending', and inactive.
       // - Privilege escalation to 'admin', 'registrar', or 'department_head' is rejected.
+      // - Reserved institutional staff emails are blocked from self-registration.
       // - Atomically binds registration to an employee_ids reservation matching this UID
       //   (either created in the same atomic transaction/batch or already owned by this UID during recovery).
       allow create: if (isOwner(uid) &&
@@ -96,9 +154,19 @@ service cloud.firestore {
                         request.resource.data.isActive == false &&
                         request.resource.data.uid == uid &&
                         (!('email' in request.resource.data) || !(request.resource.data.email in [
-                          'department.head.lu@gmail.com',
+                          'admin.lu@gmail.com',
                           'registrar.lu@gmail.com',
-                          'admin.lu@gmail.com'
+                          'department.head.lu@gmail.com',
+                          'head.cse.lu@gmail.com',
+                          'head.eee.lu@gmail.com',
+                          'head.bba.lu@gmail.com',
+                          'head.ce.lu@gmail.com',
+                          'head.law.lu@gmail.com',
+                          'head.arch.lu@gmail.com',
+                          'head.ph.lu@gmail.com',
+                          'head.thm.lu@gmail.com',
+                          'head.islamic.lu@gmail.com',
+                          'head.english.lu@gmail.com'
                         ])) &&
                         request.resource.data.employeeId is string &&
                         request.resource.data.employeeId.size() >= 3 &&
@@ -176,23 +244,28 @@ service cloud.firestore {
     match /leave_applications/{applicationId} {
       // Read access:
       // - Faculty can read their own applications
-      // - Department Head can read applications for their assigned department
-      // - Registrar and Admin can read all applications
+      // - Department Head can read ONLY their own department applications (claim + profile verified)
+      // - Registrar can read forwarded / approved / rejected applications
+      // - Admin retains administrative visibility
       allow read: if isApprovedAndActive() && (
         resource.data.applicantUid == request.auth.uid ||
-        (isDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
-        isRegistrar()
+        (isConsistentDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
+        isAdmin() ||
+        (getRole() == 'registrar' && resource.data.status in ['forwarded', 'approved', 'rejected'])
       );
 
       // Application Submission:
       // - Applicant must be active and approved
       // - Must apply for themselves
       // - Initial status must be 'pending'
-      // - Department must match applicant's assigned department
+      // - Department must be non-empty and match applicant's assigned department
       // - Reviewer/approval fields must be null/empty
       allow create: if isApprovedAndActive() &&
                        request.resource.data.applicantUid == request.auth.uid &&
                        request.resource.data.status == 'pending' &&
+                       request.resource.data.departmentId is string &&
+                       request.resource.data.departmentId.size() > 0 &&
+                       getUserDepartmentId() != null &&
                        request.resource.data.departmentId == getUserDepartmentId() &&
                        (!('headUid' in request.resource.data) || request.resource.data.headUid == null) &&
                        (!('headComment' in request.resource.data) || request.resource.data.headComment == null) &&
@@ -222,7 +295,7 @@ service cloud.firestore {
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelReason']))
         ||
         // Department Head review transition
-        (isDeptHead() &&
+        (isConsistentDeptHead() &&
          resource.data.departmentId == getUserDepartmentId() &&
          resource.data.status == 'pending' &&
          (request.resource.data.status == 'forwarded' || request.resource.data.status == 'rejected') &&
@@ -248,10 +321,10 @@ service cloud.firestore {
     // ═════════════════════════════════════════════════════════════════════════
 
     match /leave_balances/{balanceId} {
-      // Users can view their own balance; Head, Registrar, Admin can inspect balances
+      // Users can view their own balance; Head (own dept), Registrar, Admin can inspect balances
       allow read: if isAuthenticated() && (
         resource.data.userUid == request.auth.uid ||
-        (isDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
+        (isConsistentDeptHead() && resource.data.departmentId == getUserDepartmentId()) ||
         isRegistrar()
       );
 
@@ -274,7 +347,7 @@ service cloud.firestore {
       allow create: if isAuthenticated() && (
         isAdmin() ||
         isRegistrar() ||
-        (isDeptHead() &&
+        (isConsistentDeptHead() &&
          exists(/databases/$(database)/documents/users/$(request.resource.data.recipientUid)) &&
          get(/databases/$(database)/documents/users/$(request.resource.data.recipientUid)).data.departmentId == getUserDepartmentId()) ||
         request.resource.data.recipientUid == request.auth.uid

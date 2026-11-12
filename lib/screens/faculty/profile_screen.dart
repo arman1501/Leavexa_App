@@ -386,10 +386,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       textPrimary: textPrimary,
                                       textSecondary: textSecondary,
                                       surfaceAlt: surfaceAlt,
-                                      trailing: GestureDetector(
-                                        onTap: () {},
-                                        child: Icon(
-                                          Icons.open_in_new_rounded,
+                                      trailing: IconButton(
+                                        tooltip: 'Copy Email',
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        onPressed: profileData.email.trim().isEmpty
+                                            ? null
+                                            : () async {
+                                                await Clipboard.setData(
+                                                  ClipboardData(
+                                                    text: profileData.email.trim(),
+                                                  ),
+                                                );
+                                                if (context.mounted) {
+                                                  AppHelpers.showSuccess(
+                                                    context,
+                                                    'Email copied to clipboard',
+                                                  );
+                                                }
+                                              },
+                                        icon: Icon(
+                                          Icons.copy_rounded,
                                           size: 18,
                                           color: textSecondary,
                                         ),
@@ -404,10 +421,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                       textPrimary: textPrimary,
                                       textSecondary: textSecondary,
                                       surfaceAlt: surfaceAlt,
-                                      trailing: GestureDetector(
-                                        onTap: () {},
-                                        child: Icon(
-                                          Icons.phone_forwarded_rounded,
+                                      trailing: IconButton(
+                                        tooltip: 'Copy Phone Number',
+                                        padding: EdgeInsets.zero,
+                                        constraints: const BoxConstraints(),
+                                        onPressed: profileData.phone.trim().isEmpty
+                                            ? null
+                                            : () async {
+                                                await Clipboard.setData(
+                                                  ClipboardData(
+                                                    text: profileData.phone.trim(),
+                                                  ),
+                                                );
+                                                if (context.mounted) {
+                                                  AppHelpers.showSuccess(
+                                                    context,
+                                                    'Phone number copied to clipboard',
+                                                  );
+                                                }
+                                              },
+                                        icon: Icon(
+                                          Icons.copy_rounded,
                                           size: 18,
                                           color: textSecondary,
                                         ),

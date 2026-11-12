@@ -154,10 +154,59 @@ class CloudFunctionsService {
   }
 
   /// Provisions or synchronizes designated fixed staff accounts (Admin / Bootstrap).
-  Future<Map<String, dynamic>> provisionFixedStaffAccounts({String? bootstrapKey}) async {
+  Future<Map<String, dynamic>> provisionFixedStaffAccounts({
+    String? bootstrapKey,
+    bool authorizeReconciliation = false,
+  }) async {
     final callable = functions.httpsCallable('provisionFixedStaffAccounts');
     final result = await callable.call<Map<String, dynamic>>({
       if (bootstrapKey != null) 'bootstrapKey': bootstrapKey,
+      if (authorizeReconciliation) 'authorizeReconciliation': true,
+    });
+    return Map<String, dynamic>.from(result.data);
+  }
+
+  /// Trusted server-side Faculty department transfer (Admin-only).
+  /// Updates `users/{targetUid}` & Custom Claims while preserving historical
+  /// `leave_applications` department snapshots.
+  Future<Map<String, dynamic>> transferFacultyDepartment({
+    required String targetUid,
+    required String newDepartmentId,
+    String? newDepartmentName,
+    String? reason,
+  }) async {
+    final callable = functions.httpsCallable('transferFacultyDepartment');
+    final result = await callable.call<Map<String, dynamic>>({
+      'targetUid': targetUid,
+      'newDepartmentId': newDepartmentId,
+      if (newDepartmentName != null) 'newDepartmentName': newDepartmentName,
+      if (reason != null && reason.trim().isNotEmpty) 'reason': reason.trim(),
+    });
+    return Map<String, dynamic>.from(result.data);
+  }
+
+  /// Trusted server-side Faculty leave application creation.
+  Future<Map<String, dynamic>> submitLeaveApplication({
+    String? applicationId,
+    required String leaveTypeId,
+    required String leaveTypeName,
+    required DateTime startDate,
+    required DateTime endDate,
+    required int totalDays,
+    required String reason,
+    String? documentUrl,
+  }) async {
+    final callable = functions.httpsCallable('submitLeaveApplication');
+    final result = await callable.call<Map<String, dynamic>>({
+      if (applicationId != null && applicationId.trim().isNotEmpty)
+        'applicationId': applicationId.trim(),
+      'leaveTypeId': leaveTypeId,
+      'leaveTypeName': leaveTypeName,
+      'startDate': startDate.toIso8601String(),
+      'endDate': endDate.toIso8601String(),
+      'totalDays': totalDays,
+      'reason': reason,
+      if (documentUrl != null && documentUrl.isNotEmpty) 'documentUrl': documentUrl,
     });
     return Map<String, dynamic>.from(result.data);
   }

@@ -4,6 +4,8 @@
 //  administrative controls, dark mode switcher & secure logout.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -12,6 +14,7 @@ import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
 import '../../models/faculty_profile_state.dart';
+import '../../models/user_model.dart';
 import '../../repositories/auth_repository.dart';
 import '../../repositories/user_repository.dart';
 import '../../services/storage_service.dart';
@@ -20,8 +23,17 @@ import '../../widgets/app_bottom_navigation.dart';
 
 class AdminProfileScreen extends StatefulWidget {
   final AuthRepository? authRepository;
+  final UserRepository? userRepository;
+  final StorageService? storageService;
+  final ImagePicker? imagePicker;
 
-  const AdminProfileScreen({super.key, this.authRepository});
+  const AdminProfileScreen({
+    super.key,
+    this.authRepository,
+    this.userRepository,
+    this.storageService,
+    this.imagePicker,
+  });
 
   @override
   State<AdminProfileScreen> createState() => _AdminProfileScreenState();
@@ -30,21 +42,137 @@ class AdminProfileScreen extends StatefulWidget {
 class _AdminProfileScreenState extends State<AdminProfileScreen> {
   late final AuthRepository _authRepository =
       widget.authRepository ?? AuthRepository();
-  late final StorageService _storageService = StorageService();
-  late final UserRepository _userRepo = UserRepository();
+  late final StorageService _storageService =
+      widget.storageService ?? StorageService();
+  late final UserRepository _userRepo =
+      widget.userRepository ?? UserRepository();
+  StreamSubscription<List<UserModel>>? _usersSub;
   bool _isLoggingOut = false;
   bool _isUploadingPhoto = false;
-  String _adminName = 'System Administrator';
+  bool _hasStreamData = false;
+  String? _loadError;
+  String _adminName = 'Administrator';
   String _adminEmail = 'admin@leavexa.edu';
+  String _adminDesignation = 'Administrator';
+  String _adminDepartment = 'Office of the Administrator';
+  String _adminEmployeeId = 'ADMIN ID: LU-01';
+  String _adminPhone = 'Not provided';
   String? _photoUrl;
   int _pendingCount = 0;
   int _approvedCount = 0;
+  int _totalTeachersCount = 0;
+  int _activeAdminsCount = 0;
   final int _currentNavIndex = 3; // 3: Profile tab active
 
   @override
   void initState() {
     super.initState();
     _loadProfile();
+    _startRealtimeStreams();
+  }
+
+  @override
+  void dispose() {
+    _usersSub?.cancel();
+    super.dispose();
+  }
+
+  void _startRealtimeStreams() {
+    if (_usersSub != null) return;
+    try {
+      _usersSub = _userRepo.streamAllUsers().listen(
+        (allUsers) {
+          if (!mounted) return;
+          _hasStreamData = true;
+          _loadError = null;
+          final currentUid =
+              _authRepository.currentUserId ?? AuthRepository.activeUser?.uid;
+          String nextAdminName = _adminName;
+          String nextAdminEmail = _adminEmail;
+          String nextDesignation = _adminDesignation;
+          String nextDepartment = _adminDepartment;
+          String nextEmployeeId = _adminEmployeeId;
+          String nextPhone = _adminPhone;
+          String? nextPhotoUrl = _photoUrl;
+
+          if (currentUid != null) {
+            for (final u in allUsers) {
+              if (u.uid == currentUid) {
+                nextAdminName =
+                    u.fullName.isNotEmpty ? u.fullName : nextAdminName;
+                nextAdminEmail = u.email.isNotEmpty ? u.email : nextAdminEmail;
+                nextDesignation = u.designation.isNotEmpty
+                    ? u.designation
+                    : nextDesignation;
+                nextDepartment = u.departmentName.isNotEmpty
+                    ? u.departmentName
+                    : nextDepartment;
+                nextEmployeeId =
+                    u.employeeId.isNotEmpty ? u.employeeId : nextEmployeeId;
+                nextPhone = (u.phone != null && u.phone!.trim().isNotEmpty)
+                    ? u.phone!.trim()
+                    : 'Not provided';
+                nextPhotoUrl = u.photoUrl;
+                break;
+              }
+            }
+          }
+
+          final faculty = allUsers
+              .where((u) => u.role == 'faculty' && UserRepository.isGenuineUser(u))
+              .toList();
+          final admins = allUsers
+              .where((u) => u.role == 'admin' && u.isActive)
+              .toList();
+
+          final nextPending = faculty.where((u) => u.isPending).length;
+          final nextApproved = faculty.where((u) => u.isApproved).length;
+          final nextTeachers = faculty.length;
+          final nextAdmins = admins.length;
+
+          if (_adminName == nextAdminName &&
+              _adminEmail == nextAdminEmail &&
+              _adminDesignation == nextDesignation &&
+              _adminDepartment == nextDepartment &&
+              _adminEmployeeId == nextEmployeeId &&
+              _adminPhone == nextPhone &&
+              _photoUrl == nextPhotoUrl &&
+              _pendingCount == nextPending &&
+              _approvedCount == nextApproved &&
+              _totalTeachersCount == nextTeachers &&
+              _activeAdminsCount == nextAdmins &&
+              _loadError == null) {
+            return;
+          }
+
+          setState(() {
+            _adminName = nextAdminName;
+            _adminEmail = nextAdminEmail;
+            _adminDesignation = nextDesignation;
+            _adminDepartment = nextDepartment;
+            _adminEmployeeId = nextEmployeeId;
+            _adminPhone = nextPhone;
+            _photoUrl = nextPhotoUrl;
+            _pendingCount = nextPending;
+            _approvedCount = nextApproved;
+            _totalTeachersCount = nextTeachers;
+            _activeAdminsCount = nextAdmins;
+            _loadError = null;
+          });
+        },
+        onError: (_) {
+          if (!mounted) return;
+          setState(() {
+            if (!_hasStreamData) {
+              _loadError = 'Unable to sync live metrics. Tap retry to refresh.';
+            }
+          });
+        },
+      );
+    } catch (_) {
+      // Gracefully fall back to future-based _loadProfile() in unit tests where
+      // Firebase is not initialized and streamAllUsers() is not mocked.
+    }
   }
 
   Future<void> _loadProfile() async {
@@ -54,27 +182,50 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
         setState(() {
           _adminName = user.fullName;
           _adminEmail = user.email;
+          if (user.designation.isNotEmpty) {
+            _adminDesignation = user.designation;
+          }
+          if (user.departmentName.isNotEmpty) {
+            _adminDepartment = user.departmentName;
+          }
+          if (user.employeeId.isNotEmpty) {
+            _adminEmployeeId = user.employeeId;
+          }
+          if (user.phone != null && user.phone!.trim().isNotEmpty) {
+            _adminPhone = user.phone!.trim();
+          }
           _photoUrl = user.photoUrl;
         });
       }
       final pending = await _userRepo.getPendingFaculty();
       final all = await _userRepo.getAllFaculty();
-      if (mounted) {
+      final admins = await _userRepo.getActiveAdmins();
+      final genuinePending =
+          pending.where(UserRepository.isGenuineUser).toList();
+      final genuineAll = all.where(UserRepository.isGenuineUser).toList();
+      if (mounted && !_hasStreamData) {
         setState(() {
-          _pendingCount = pending.length;
-          _approvedCount = all.where((u) => u.isApproved).length;
+          _pendingCount = genuinePending.length;
+          _approvedCount = genuineAll.where((u) => u.isApproved).length;
+          _totalTeachersCount = genuineAll.length;
+          _activeAdminsCount = admins.length;
+          _loadError = null;
         });
       }
-    } catch (_) {}
+    } catch (_) {
+      // In unit tests without Firebase initialized, preserve loaded profile metrics.
+    }
   }
 
   Future<void> _onPickProfileImage() async {
     if (_isUploadingPhoto) return;
     try {
-      final picker = ImagePicker();
+      final picker = widget.imagePicker ?? ImagePicker();
       final picked = await picker.pickImage(
         source: ImageSource.gallery,
-        imageQuality: 85,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 75,
       );
       if (picked == null) return;
 
@@ -92,21 +243,55 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
       final uid =
           _authRepository.currentUserId ?? AuthRepository.activeUser?.uid;
-      if (uid == null) return;
+      if (uid == null) {
+        if (mounted) {
+          AppHelpers.showError(
+            context,
+            'Session expired. Please sign in again to update your photo.',
+          );
+        }
+        return;
+      }
 
       setState(() => _isUploadingPhoto = true);
 
-      final downloadUrl = await _storageService.uploadProfileImage(
-        uid: uid,
-        file: file,
-        previousPhotoUrl: _photoUrl,
-      );
+      final realMime = await StorageService.detectRealMimeType(file);
+      if (!realMime.startsWith('image/')) {
+        throw const StorageValidationException(
+          'Selected file is not a supported image (JPG, PNG, WEBP).',
+        );
+      }
 
-      await _userRepo.updateUser(uid, {'photoUrl': downloadUrl});
+      String nextPhotoUrl;
+      try {
+        nextPhotoUrl = await _storageService
+            .uploadProfileImage(
+              uid: uid,
+              file: file,
+              previousPhotoUrl: _photoUrl,
+            )
+            .timeout(const Duration(seconds: 8));
+      } catch (_) {
+        // Fallback when Firebase Storage bucket is unprovisioned or offline:
+        // persist compressed 512x512 image directly as a data URI in Firestore.
+        final bytes = await file.readAsBytes();
+        if (bytes.length > 500 * 1024) {
+          throw const StorageValidationException(
+            'Image is too large after compression. Please select a smaller image.',
+          );
+        }
+        nextPhotoUrl = 'data:$realMime;base64,${base64Encode(bytes)}';
+      }
+
+      await _userRepo.updateUser(uid, {'photoUrl': nextPhotoUrl});
+      if (AuthRepository.activeUser != null) {
+        AuthRepository.activeUser =
+            AuthRepository.activeUser!.copyWith(photoUrl: nextPhotoUrl);
+      }
 
       if (mounted) {
         setState(() {
-          _photoUrl = downloadUrl;
+          _photoUrl = nextPhotoUrl;
           _isUploadingPhoto = false;
         });
         AppHelpers.showSuccess(context, 'Profile photo updated successfully!');
@@ -150,19 +335,49 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
     final uid =
         _authRepository.currentUserId ?? AuthRepository.activeUser?.uid;
-    if (uid == null) return;
+    if (uid == null) {
+      if (mounted) {
+        AppHelpers.showError(
+          context,
+          'Session expired. Please sign in again.',
+        );
+      }
+      return;
+    }
 
     setState(() => _isUploadingPhoto = true);
 
     try {
       final oldUrl = _photoUrl;
-      if (oldUrl != null && oldUrl.isNotEmpty) {
+      if (oldUrl != null &&
+          oldUrl.isNotEmpty &&
+          oldUrl.startsWith('http')) {
         try {
-          await _storageService.deleteByUrl(oldUrl);
+          await _storageService
+              .deleteByUrl(oldUrl)
+              .timeout(const Duration(seconds: 5));
         } catch (_) {}
       }
 
       await _userRepo.updateUser(uid, {'photoUrl': null});
+      if (AuthRepository.activeUser != null) {
+        final u = AuthRepository.activeUser!;
+        AuthRepository.activeUser = UserModel(
+          uid: u.uid,
+          fullName: u.fullName,
+          email: u.email,
+          employeeId: u.employeeId,
+          departmentId: u.departmentId,
+          departmentName: u.departmentName,
+          designation: u.designation,
+          role: u.role,
+          phone: u.phone,
+          photoUrl: null,
+          isActive: u.isActive,
+          approvalStatus: u.approvalStatus,
+          createdAt: u.createdAt,
+        );
+      }
 
       if (mounted) {
         setState(() {
@@ -191,6 +406,8 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
         final textSecondary =
             isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        final accentColor =
+            isDark ? const Color(0xFF34D399) : const Color(0xFF1B4332);
         final hasPhoto = _photoUrl != null && _photoUrl!.isNotEmpty;
 
         return SafeArea(
@@ -225,9 +442,9 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                 ),
                 const SizedBox(height: 12),
                 ListTile(
-                  leading: const Icon(
+                  leading: Icon(
                     Icons.photo_library_outlined,
-                    color: Color(0xFF1B4332),
+                    color: accentColor,
                   ),
                   title: Text(
                     hasPhoto ? 'Change Photo' : 'Upload Photo',
@@ -240,9 +457,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                     'Choose an image from your gallery',
                     style: TextStyle(color: textSecondary, fontSize: 12),
                   ),
-                  onTap: () {
+                  onTap: () async {
                     Navigator.pop(ctx);
-                    _onPickProfileImage();
+                    await Future.delayed(const Duration(milliseconds: 80));
+                    if (mounted) _onPickProfileImage();
                   },
                 ),
                 if (hasPhoto)
@@ -262,9 +480,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                       'Use a clean initials avatar instead',
                       style: TextStyle(color: textSecondary, fontSize: 12),
                     ),
-                    onTap: () {
+                    onTap: () async {
                       Navigator.pop(ctx);
-                      _onRemoveProfilePhoto();
+                      await Future.delayed(const Duration(milliseconds: 80));
+                      if (mounted) _onRemoveProfilePhoto();
                     },
                   ),
                 ListTile(
@@ -378,18 +597,26 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                         ? null
                         : () async {
                             Navigator.pop(dialogCtx);
+                            // Cancel live listener immediately before waiting for dialog dismissal.
+                            _usersSub?.cancel();
+                            _usersSub = null;
+                            await Future.delayed(
+                              const Duration(milliseconds: 100),
+                            );
+                            if (!mounted) return;
                             setState(() => _isLoggingOut = true);
                             try {
                               await _authRepository.logout();
-                              AppThemeState.instance.resetToLightMode();
                               FacultyProfileState.instance.reset();
-                              if (mounted) {
-                                Navigator.pushNamedAndRemoveUntil(
-                                  context,
-                                  AppRoutes.login,
-                                  (route) => false,
-                                );
-                              }
+                              if (!mounted) return;
+                              Navigator.of(context, rootNavigator: true)
+                                  .pushNamedAndRemoveUntil(
+                                AppRoutes.login,
+                                (route) => false,
+                              );
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                AppThemeState.instance.resetToLightMode();
+                              });
                             } catch (e) {
                               if (mounted) {
                                 setState(() => _isLoggingOut = false);
@@ -454,29 +681,26 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<ThemeMode>(
-      valueListenable: AppThemeState.instance.themeModeNotifier,
-      builder: (context, themeMode, child) {
-        final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark
-            ? const Color(0xFF0F172A)
-            : const Color(0xFFF8FAFC);
-        final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark
-            ? const Color(0xFF334155)
-            : const Color(0xFFE2E8F0);
-        final textPrimary = isDark
-            ? const Color(0xFFF8FAFC)
-            : const Color(0xFF0F172A);
-        final textSecondary = isDark
-            ? const Color(0xFF94A3B8)
-            : const Color(0xFF64748B);
-        final dividerColor = isDark
-            ? const Color(0xFF334155)
-            : const Color(0xFFF1F5F9);
-        final surfaceAlt = isDark
-            ? const Color(0xFF334155)
-            : const Color(0xFFF1F5F9);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bgColor = isDark
+        ? const Color(0xFF0F172A)
+        : const Color(0xFFF8FAFC);
+    final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
+    final borderColor = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFE2E8F0);
+    final textPrimary = isDark
+        ? const Color(0xFFF8FAFC)
+        : const Color(0xFF0F172A);
+    final textSecondary = isDark
+        ? const Color(0xFF94A3B8)
+        : const Color(0xFF64748B);
+    final dividerColor = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFF1F5F9);
+    final surfaceAlt = isDark
+        ? const Color(0xFF334155)
+        : const Color(0xFFF1F5F9);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
@@ -503,16 +727,26 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
-                        Text(
-                          'Admin Profile',
-                          style: TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.w800,
-                            fontFamily: 'serif',
-                            color: textPrimary,
-                            letterSpacing: -0.5,
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                'Admin Profile',
+                                maxLines: 1,
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                  color: textPrimary,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
+                        const SizedBox(width: 8),
                         // Settings / Dark Mode toggle
                         GestureDetector(
                           onTap: () {
@@ -643,9 +877,12 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           ),
                           const SizedBox(height: 3),
 
-                          // Designation
+                          // Designation (avoid repeating full name identically)
                           Text(
-                            'Chief Registrar & IT Systems',
+                            _adminDesignation.toLowerCase() ==
+                                    _adminName.toLowerCase()
+                                ? 'Chief Registrar & IT Systems'
+                                : _adminDesignation,
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 13.5,
@@ -657,7 +894,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
 
                           // Department
                           Text(
-                            'Office of the Registrar & Administration',
+                            _adminDepartment,
                             textAlign: TextAlign.center,
                             style: TextStyle(
                               fontSize: 12.5,
@@ -669,8 +906,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           const SizedBox(height: 12),
 
                           // Badges Row: Access Level + Employee ID
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 8,
+                            runSpacing: 6,
                             children: [
                               Container(
                                 padding: const EdgeInsets.symmetric(
@@ -712,7 +951,6 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                                   ],
                                 ),
                               ),
-                              const SizedBox(width: 8),
                               Container(
                                 padding: const EdgeInsets.symmetric(
                                   horizontal: 10,
@@ -732,7 +970,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                                     ),
                                     const SizedBox(width: 4),
                                     Text(
-                                      'EMP-ADM01',
+                                      _adminEmployeeId,
                                       style: TextStyle(
                                         fontSize: 11.5,
                                         fontWeight: FontWeight.w700,
@@ -748,9 +986,51 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                       ),
                     ),
 
+                    if (_loadError != null) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFCA5A5)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.wifi_off_rounded,
+                              size: 18,
+                              color: Color(0xFFDC2626),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                _loadError!,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF991B1B),
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () {
+                                setState(() => _loadError = null);
+                                _loadProfile();
+                              },
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+
                     const SizedBox(height: 20),
 
-                    // ── 3. SYSTEM STATS OVERVIEW CARDS ───────────────────────
+                    // ── 3. SYSTEM STATS OVERVIEW CARDS (Image 3 Style) ───────
                     Row(
                       children: [
                         Expanded(
@@ -759,9 +1039,9 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             borderColor: borderColor,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
-                            label: 'Teachers',
-                            value: '$_approvedCount',
-                            color: const Color(0xFF047857),
+                            label: 'Total Teachers',
+                            value: '$_totalTeachersCount',
+                            color: const Color(0xFF00C48C),
                             icon: Icons.people_outline_rounded,
                           ),
                         ),
@@ -772,10 +1052,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             borderColor: borderColor,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
-                            label: 'Pending',
+                            label: 'Pending Requests',
                             value: '$_pendingCount',
-                            color: const Color(0xFFB45309),
-                            icon: Icons.pending_actions_rounded,
+                            color: const Color(0xFFF59E0B),
+                            icon: Icons.access_time_rounded,
                           ),
                         ),
                         const SizedBox(width: 10),
@@ -785,10 +1065,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                             borderColor: borderColor,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
-                            label: 'Uptime',
-                            value: '99.9%',
-                            color: const Color(0xFF2563EB),
-                            icon: Icons.speed_rounded,
+                            label: 'Active Admins',
+                            value: '$_activeAdminsCount',
+                            color: const Color(0xFF3B82F6),
+                            icon: Icons.manage_accounts_outlined,
                           ),
                         ),
                       ],
@@ -820,7 +1100,10 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           _AdminInfoRow(
                             icon: Icons.person_outline_rounded,
                             label: 'Official Title',
-                            value: 'System Administrator & Registrar',
+                            value: _adminDesignation.toLowerCase() ==
+                                    _adminName.toLowerCase()
+                                ? 'System Administrator'
+                                : _adminDesignation,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                           ),
@@ -836,7 +1119,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           _AdminInfoRow(
                             icon: Icons.phone_outlined,
                             label: 'Hotline / Contact',
-                            value: '+880 1700-000000',
+                            value: _adminPhone,
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                           ),
@@ -844,7 +1127,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           _AdminInfoRow(
                             icon: Icons.room_outlined,
                             label: 'Office Location',
-                            value: 'Registrar Complex, Room 204',
+                            value: 'Building RKB-204',
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                           ),
@@ -852,7 +1135,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           _AdminInfoRow(
                             icon: Icons.security_outlined,
                             label: 'Access Privilege',
-                            value: 'Full Super-Admin (Level 1)',
+                            value: 'Full Super-Admin (Level-1)',
                             textPrimary: textPrimary,
                             textSecondary: textSecondary,
                           ),
@@ -875,87 +1158,112 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                     const SizedBox(height: 10),
 
                     Container(
+                      key: const ValueKey('admin_profile_shortcuts_card'),
                       clipBehavior: Clip.antiAlias,
                       decoration: BoxDecoration(
                         color: cardBg,
                         borderRadius: BorderRadius.circular(16),
                         border: Border.all(color: borderColor),
                       ),
-                      child: Column(
-                        children: [
-                          ListTile(
-                            leading: Container(
-                              width: 38,
-                              height: 38,
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFDCFCE7),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(
-                                Icons.people_outline_rounded,
-                                color: Color(0xFF047857),
-                                size: 20,
-                              ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: ListTile(
+                          leading: Container(
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: isDark
+                                  ? const Color(0xFF064E3B)
+                                      .withValues(alpha: 0.5)
+                                  : const Color(0xFFDCFCE7),
+                              borderRadius: BorderRadius.circular(8),
                             ),
-                            title: Text(
-                              'Verified Faculty Directory',
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
-                                color: textPrimary,
-                              ),
+                            child: Icon(
+                              Icons.people_outline_rounded,
+                              color: isDark
+                                  ? const Color(0xFF34D399)
+                                  : const Color(0xFF047857),
+                              size: 20,
                             ),
-                            subtitle: Text(
-                              '$_approvedCount registered faculty members',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: textSecondary,
-                              ),
+                          ),
+                          title: Text(
+                            'Verified Faculty Directory',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: textPrimary,
                             ),
-                            trailing: Icon(
-                              Icons.chevron_right_rounded,
+                          ),
+                          subtitle: Text(
+                            '$_approvedCount registered faculty members',
+                            style: TextStyle(
+                              fontSize: 12,
                               color: textSecondary,
                             ),
-                            onTap: () {
-                              Navigator.pushReplacementNamed(
-                                context,
-                                AppRoutes.adminDashboard,
-                                arguments: {'tab': 2},
-                              );
-                            },
                           ),
-                        ],
+                          trailing: Icon(
+                            Icons.chevron_right_rounded,
+                            color: textSecondary,
+                          ),
+                          onTap: () {
+                            Navigator.pushReplacementNamed(
+                              context,
+                              AppRoutes.adminDashboard,
+                              arguments: {'tab': 2},
+                            );
+                          },
+                        ),
                       ),
                     ),
 
                     const SizedBox(height: 24),
 
                     // ── 6. LOG OUT BUTTON ────────────────────────────────────
-                    SizedBox(
+                    Container(
+                      key: const ValueKey('admin_profile_logout_btn'),
                       width: double.infinity,
                       height: 48,
-                      child: OutlinedButton.icon(
-                        onPressed: _onLogOut,
-                        icon: const Icon(
-                          Icons.logout_rounded,
-                          size: 18,
-                          color: Color(0xFFDC2626),
+                      clipBehavior: Clip.antiAlias,
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? const Color(0xFF450A0A).withValues(alpha: 0.3)
+                            : const Color(0xFFFEF2F2),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: isDark
+                              ? const Color(0xFF7F1D1D)
+                              : const Color(0xFFFECACA),
                         ),
-                        label: const Text(
-                          'Log Out of Admin Portal',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFFDC2626),
-                          ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0xFFFECACA)),
-                          backgroundColor: isDark
-                              ? const Color(0xFF450A0A).withValues(alpha: 0.3)
-                              : const Color(0xFFFEF2F2),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Material(
+                        type: MaterialType.transparency,
+                        child: InkWell(
+                          onTap: _isLoggingOut ? null : _onLogOut,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 12),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.logout_rounded,
+                                  size: 18,
+                                  color: Color(0xFFDC2626),
+                                ),
+                                SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    'Log Out of Admin Portal',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFFDC2626),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -969,12 +1277,11 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
             bottomNavigationBar: AppBottomNavigation(
               currentIndex: _currentNavIndex,
               role: 'admin',
+              adminApprovalBadgeCount: _pendingCount > 0 ? _pendingCount : null,
               onTap: _onBottomNavTap,
             ),
           ),
         );
-      },
-    );
   }
 
   Widget _buildStatBlock({
@@ -988,31 +1295,46 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
     required IconData icon,
   }) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 16),
       decoration: BoxDecoration(
         color: cardBg,
-        borderRadius: BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(color: borderColor),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.02),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(height: 6),
+          Icon(icon, size: 24, color: color),
+          const SizedBox(height: 10),
           Text(
             value,
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 22,
               fontWeight: FontWeight.w800,
               color: color,
+              letterSpacing: -0.4,
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: textSecondary,
+          const SizedBox(height: 8),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w500,
+                color: textSecondary,
+              ),
             ),
           ),
         ],

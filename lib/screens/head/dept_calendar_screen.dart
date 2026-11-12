@@ -1,38 +1,212 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  dept_calendar_screen.dart  –  Department Head Calendar Screen
-//  Pixel-perfect implementation of Department Calendar UI (All 3 Views:
-//  1. Overview & Calendar Grid
-//  2. Selected Day Faculty Leaves Card (25 Sep)
-//  3. Filters & Upcoming Leaves View)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/utils/helpers.dart';
+import '../../models/leave_application_model.dart';
+import '../../models/user_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
+import '../../repositories/user_repository.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class DeptCalendarScreen extends StatefulWidget {
-  const DeptCalendarScreen({super.key});
+  final AuthRepository? authRepository;
+  final LeaveRepository? leaveRepository;
+  final UserRepository? userRepository;
+
+  const DeptCalendarScreen({
+    super.key,
+    this.authRepository,
+    this.leaveRepository,
+    this.userRepository,
+  });
 
   @override
   State<DeptCalendarScreen> createState() => _DeptCalendarScreenState();
 }
 
 class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
-  int _currentNavIndex = 2; // 2: Calendar tab active
-  String _selectedViewTab = 'Month'; // 'Month', 'Week', 'Day'
-  int _selectedDay = 25; // Default to 25 to match screenshot
-  bool _showDayDetails = true; // True: Screen 2, False: Screen 1
-  bool _isFilterViewActive = false; // True: Screen 3
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final UserRepository _userRepo =
+      widget.userRepository ?? UserRepository();
 
-  // Filter state for Screen 3
-  String _selectedStatusFilter =
-      'All'; // 'All', 'Approved', 'Pending', 'Upcoming'
+  String _departmentTitle = 'Department Faculty Leave Overview';
+  int _currentNavIndex = 2;
+  String _selectedViewTab = 'Month';
+  DateTime _focusedMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
+  DateTime _selectedDate = DateTime(
+    DateTime.now().year,
+    DateTime.now().month,
+    DateTime.now().day,
+  );
+  bool _showDayDetails = true;
+  bool _isFilterViewActive = false;
+
+  bool _isLoading = true;
+  String? _errorMessage;
+  List<LeaveApplicationModel> _deptApplications = [];
+  List<UserModel> _deptFaculty = [];
+
+  // Filter state
+  String _selectedStatusFilter = 'All';
   String _selectedLeaveType = 'All Leave Types';
-  String _selectedFaculty = 'All Faculty';
-  bool _isFilterCardExpanded = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDepartmentData();
+  }
+
+  Future<void> _loadDepartmentData() async {
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
+    try {
+      final user = await _authRepo.getCurrentUserProfile();
+      if (!mounted) return;
+      final deptId = user?.departmentId.trim() ?? '';
+      if (deptId.isEmpty) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'Missing department assignment for this Head account.';
+        });
+        return;
+      }
+
+      final name = user!.departmentName.trim().isNotEmpty
+          ? user.departmentName.trim()
+          : (AppConstants.departmentIdToCanonicalName[deptId] ?? deptId);
+
+      final results = await Future.wait([
+        _leaveRepo.departmentApplications(deptId),
+        _userRepo.getFacultyByDepartment(deptId),
+      ]);
+
+      if (!mounted) return;
+      setState(() {
+        _departmentTitle = '$name • Faculty Leave Overview';
+        _deptApplications = results[0] as List<LeaveApplicationModel>;
+        _deptFaculty = results[1] as List<UserModel>;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Unable to load department calendar: $e';
+      });
+    }
+  }
+
+  void _changeMonth(int delta) {
+    setState(() {
+      final next = DateTime(_focusedMonth.year, _focusedMonth.month + delta, 1);
+      _focusedMonth = next;
+      final daysInNext = DateUtils.getDaysInMonth(next.year, next.month);
+      final clampedDay = _selectedDate.day.clamp(1, daysInNext);
+      _selectedDate = DateTime(next.year, next.month, clampedDay);
+    });
+  }
+
+  void _goToToday() {
+    final now = DateTime.now();
+    setState(() {
+      _focusedMonth = DateTime(now.year, now.month, 1);
+      _selectedDate = DateTime(now.year, now.month, now.day);
+      _showDayDetails = true;
+    });
+  }
+
+  bool _coversDate(LeaveApplicationModel app, DateTime day) {
+    final target = DateTime(day.year, day.month, day.day);
+    final start = DateTime(
+      app.startDate.year,
+      app.startDate.month,
+      app.startDate.day,
+    );
+    final end = DateTime(app.endDate.year, app.endDate.month, app.endDate.day);
+    return !target.isBefore(start) && !target.isAfter(end);
+  }
+
+  List<LeaveApplicationModel> _applicationsForDay(DateTime day) {
+    return _deptApplications
+        .where(
+          (a) =>
+              (a.status == 'approved' ||
+                  a.status == 'pending' ||
+                  a.status == 'forwarded') &&
+              _coversDate(a, day),
+        )
+        .toList();
+  }
+
+  List<Color> _dotsForDay(DateTime day) {
+    final apps = _applicationsForDay(day);
+    if (apps.isEmpty) return const [];
+    final dots = <Color>[];
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    final hasApproved = apps.any((a) => a.status == 'approved');
+    final hasPending = apps.any(
+      (a) => a.status == 'pending' || a.status == 'forwarded',
+    );
+    final isUpcoming = hasApproved && day.isAfter(today);
+
+    if (hasApproved) {
+      dots.add(isUpcoming ? const Color(0xFF2563EB) : const Color(0xFF16A34A));
+    }
+    if (hasPending) {
+      dots.add(const Color(0xFFF59E0B));
+    }
+    if (apps.length >= 2) {
+      dots.add(const Color(0xFFDC2626));
+    }
+    return dots;
+  }
+
+  List<LeaveApplicationModel> get _filteredApplications {
+    final today = DateTime(
+      DateTime.now().year,
+      DateTime.now().month,
+      DateTime.now().day,
+    );
+    return _deptApplications.where((app) {
+      if (_selectedStatusFilter == 'Approved' && app.status != 'approved') {
+        return false;
+      }
+      if (_selectedStatusFilter == 'Pending' &&
+          app.status != 'pending' &&
+          app.status != 'forwarded') {
+        return false;
+      }
+      if (_selectedStatusFilter == 'Upcoming' &&
+          (app.status != 'approved' || !app.startDate.isAfter(today))) {
+        return false;
+      }
+      if (_selectedLeaveType != 'All Leave Types' &&
+          !app.leaveTypeName.toLowerCase().contains(
+            _selectedLeaveType.toLowerCase(),
+          )) {
+        return false;
+      }
+      return true;
+    }).toList();
+  }
 
   void _onBottomNavTap(int index) {
     if (index == _currentNavIndex) return;
@@ -58,155 +232,155 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
       valueListenable: AppThemeState.instance.themeModeNotifier,
       builder: (context, themeMode, child) {
         final isDark = themeMode == ThemeMode.dark;
-        final bgColor = isDark
-            ? const Color(0xFF0F172A)
-            : const Color(0xFFF8FAFC);
+        final bgColor =
+            isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
         final cardBg = isDark ? const Color(0xFF1E293B) : Colors.white;
-        final borderColor = isDark
-            ? const Color(0xFF334155)
-            : const Color(0xFFE2E8F0);
-        final textPrimary = isDark
-            ? const Color(0xFFF8FAFC)
-            : const Color(0xFF0F172A);
-        final textSecondary = isDark
-            ? const Color(0xFF94A3B8)
-            : const Color(0xFF64748B);
-        final primaryColor = isDark
-            ? const Color(0xFF047857)
-            : const Color(0xFF1B4332);
-        final subtleBg = isDark
-            ? const Color(0xFF334155)
-            : const Color(0xFFF1F5F9);
+        final borderColor =
+            isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+        final textPrimary =
+            isDark ? const Color(0xFFF8FAFC) : const Color(0xFF0F172A);
+        final textSecondary =
+            isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+        const primaryColor = Color(0xFF0B6A41);
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle(
             statusBarColor: Colors.transparent,
-            statusBarIconBrightness: isDark
-                ? Brightness.light
-                : Brightness.dark,
+            statusBarIconBrightness:
+                isDark ? Brightness.light : Brightness.dark,
             statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
           ),
           child: Scaffold(
             backgroundColor: bgColor,
-            // ── APPBAR ──────────────────────────────────────────────────────
             appBar: AppBar(
-              backgroundColor: cardBg,
+              backgroundColor: bgColor,
               elevation: 0,
               scrolledUnderElevation: 0,
-              centerTitle: false,
-              leading: _isFilterViewActive
-                  ? IconButton(
-                      icon: Icon(
-                        Icons.arrow_back,
-                        color: textPrimary,
-                        size: 22,
-                      ),
-                      onPressed: () {
-                        setState(() => _isFilterViewActive = false);
-                      },
-                    )
-                  : Padding(
-                      padding: const EdgeInsets.only(left: 16),
-                      child: Center(
-                        child: Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: primaryColor,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: const Icon(
-                            Icons.calendar_month_rounded,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                    ),
-              title: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisAlignment: MainAxisAlignment.center,
+              automaticallyImplyLeading: false,
+              titleSpacing: 16,
+              title: Row(
                 children: [
-                  Text(
-                    'Department Calendar',
-                    style: TextStyle(
-                      fontSize: 17.5,
-                      fontWeight: FontWeight.w800,
-                      color: textPrimary,
-                      letterSpacing: -0.2,
+                  GestureDetector(
+                    onTap: () {
+                      if (_isFilterViewActive) {
+                        setState(() => _isFilterViewActive = false);
+                      } else {
+                        Navigator.pushReplacementNamed(
+                          context,
+                          AppRoutes.headDashboard,
+                        );
+                      }
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.only(right: 12),
+                      child: Icon(
+                        Icons.arrow_back_rounded,
+                        color: textPrimary,
+                        size: 24,
+                      ),
                     ),
                   ),
-                  if (!_isFilterViewActive)
-                    Text(
-                      'CSE Department • Faculty Leave Overview',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: textSecondary,
-                      ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Department Calendar',
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w800,
+                            color: textPrimary,
+                            letterSpacing: -0.3,
+                          ),
+                        ),
+                        Text(
+                          _departmentTitle,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w500,
+                            color: textSecondary,
+                          ),
+                        ),
+                      ],
                     ),
+                  ),
                 ],
               ),
               actions: [
-                if (_isFilterViewActive)
-                  IconButton(
-                    icon: Icon(
-                      Icons.filter_alt_outlined,
-                      color: primaryColor,
-                      size: 22,
-                    ),
-                    onPressed: () {},
-                  )
-                else ...[
-                  IconButton(
-                    icon: Icon(
-                      Icons.filter_list_rounded,
-                      color: textPrimary,
-                      size: 22,
-                    ),
-                    onPressed: () {
-                      setState(() => _isFilterViewActive = true);
-                    },
+                IconButton(
+                  tooltip: _isFilterViewActive ? 'Calendar View' : 'Filter Leaves',
+                  icon: Icon(
+                    _isFilterViewActive
+                        ? Icons.calendar_month_rounded
+                        : Icons.filter_list_rounded,
+                    color: _isFilterViewActive ? primaryColor : textPrimary,
+                    size: 22,
                   ),
-                  IconButton(
-                    icon: Icon(
-                      Icons.notifications_none_rounded,
-                      color: textPrimary,
-                      size: 22,
-                    ),
-                    onPressed: () {},
+                  onPressed: () {
+                    setState(() => _isFilterViewActive = !_isFilterViewActive);
+                  },
+                ),
+                IconButton(
+                  tooltip: 'Notifications',
+                  icon: Icon(
+                    Icons.notifications_none_rounded,
+                    color: textPrimary,
+                    size: 22,
                   ),
-                ],
+                  onPressed: () {
+                    Navigator.pushNamed(context, AppRoutes.notifications);
+                  },
+                ),
                 const SizedBox(width: 8),
               ],
             ),
-
-            // ── BODY CONTENT ────────────────────────────────────────────────
             body: SafeArea(
-              child: _isFilterViewActive
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : _errorMessage != null
+                  ? Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              _errorMessage!,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: textSecondary),
+                            ),
+                            const SizedBox(height: 12),
+                            ElevatedButton(
+                              onPressed: _loadDepartmentData,
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                  : _isFilterViewActive
                   ? _buildFilterView(
+                      isDark: isDark,
                       cardBg: cardBg,
                       borderColor: borderColor,
                       textPrimary: textPrimary,
                       textSecondary: textSecondary,
                       primaryColor: primaryColor,
-                      isDark: isDark,
-                      subtleBg: subtleBg,
                     )
                   : _buildCalendarView(
+                      isDark: isDark,
                       cardBg: cardBg,
                       borderColor: borderColor,
                       textPrimary: textPrimary,
                       textSecondary: textSecondary,
                       primaryColor: primaryColor,
-                      isDark: isDark,
-                      subtleBg: subtleBg,
                     ),
             ),
             bottomNavigationBar: AppBottomNavigation(
               currentIndex: _currentNavIndex,
-              role: 'department_head',
               onTap: _onBottomNavTap,
+              role: 'department_head',
             ),
           ),
         );
@@ -214,49 +388,123 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  //  VIEW 1 & 2: CALENDAR & OVERVIEW / SELECTED DAY
-  // ───────────────────────────────────────────────────────────────────────────
   Widget _buildCalendarView({
+    required bool isDark,
     required Color cardBg,
     required Color borderColor,
     required Color textPrimary,
     required Color textSecondary,
     required Color primaryColor,
-    required bool isDark,
-    required Color subtleBg,
   }) {
+    final monthLabel = DateFormat('MMMM yyyy').format(_focusedMonth);
+    final firstWeekdayOffset = _focusedMonth.weekday % 7; // Sun=0..Sat=6
+    final daysInMonth =
+        DateUtils.getDaysInMonth(_focusedMonth.year, _focusedMonth.month);
+    final prevMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1, 1);
+    final daysInPrevMonth =
+        DateUtils.getDaysInMonth(prevMonth.year, prevMonth.month);
+
+    final totalCells = ((firstWeekdayOffset + daysInMonth + 6) ~/ 7) * 7;
+    final rows = <Widget>[];
+    for (int rowStart = 0; rowStart < totalCells; rowStart += 7) {
+      final cells = <Widget>[];
+      for (int col = 0; col < 7; col++) {
+        final idx = rowStart + col;
+        if (idx < firstWeekdayOffset) {
+          final dayNum = daysInPrevMonth - (firstWeekdayOffset - 1 - idx);
+          cells.add(
+            _buildDayCell(
+              day: dayNum,
+              date: DateTime(prevMonth.year, prevMonth.month, dayNum),
+              isOtherMonth: true,
+              textPrimary: textPrimary,
+            ),
+          );
+        } else if (idx >= firstWeekdayOffset + daysInMonth) {
+          final dayNum = idx - (firstWeekdayOffset + daysInMonth) + 1;
+          final nextMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1, 1);
+          cells.add(
+            _buildDayCell(
+              day: dayNum,
+              date: DateTime(nextMonth.year, nextMonth.month, dayNum),
+              isOtherMonth: true,
+              textPrimary: textPrimary,
+            ),
+          );
+        } else {
+          final dayNum = idx - firstWeekdayOffset + 1;
+          final cellDate = DateTime(_focusedMonth.year, _focusedMonth.month, dayNum);
+          cells.add(
+            _buildDayCell(
+              day: dayNum,
+              date: cellDate,
+              dots: _dotsForDay(cellDate),
+              textPrimary: textPrimary,
+            ),
+          );
+        }
+      }
+      rows.add(Row(children: cells));
+      if (rowStart + 7 < totalCells) {
+        rows.add(const SizedBox(height: 6));
+      }
+    }
+
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── 1. VIEW SEGMENTED SWITCHER (Month | Week | Day) ────────────────
           Container(
-            padding: const EdgeInsets.all(4),
+            height: 40,
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: subtleBg,
-              borderRadius: BorderRadius.circular(12),
+              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
-              children: [
-                _buildSegmentTab('Month', primaryColor),
-                _buildSegmentTab('Week', primaryColor),
-                _buildSegmentTab('Day', primaryColor),
-              ],
+              children: ['Month', 'Week', 'Day'].map((tab) {
+                final isSelected = _selectedViewTab == tab;
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _selectedViewTab = tab;
+                        if (tab == 'Day') _showDayDetails = true;
+                      });
+                    },
+                    child: Container(
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? (isDark ? const Color(0xFF334155) : Colors.white)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        tab,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight:
+                              isSelected ? FontWeight.w700 : FontWeight.w600,
+                          color: isSelected ? textPrimary : textSecondary,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
           ),
-
           const SizedBox(height: 14),
-
-          // ── 2. MONTH SELECTOR & TODAY ROW ──────────────────────────────────
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Row(
                 children: [
                   IconButton(
+                    tooltip: 'Previous Month',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     icon: Icon(
@@ -264,28 +512,20 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                       size: 24,
                       color: textPrimary,
                     ),
-                    onPressed: () {},
+                    onPressed: () => _changeMonth(-1),
                   ),
-                  const SizedBox(width: 4),
-                  Row(
-                    children: [
-                      Text(
-                        'September 2026',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          color: textPrimary,
-                        ),
-                      ),
-                      Icon(
-                        Icons.keyboard_arrow_down_rounded,
-                        size: 20,
-                        color: textPrimary,
-                      ),
-                    ],
+                  const SizedBox(width: 8),
+                  Text(
+                    monthLabel,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: textPrimary,
+                    ),
                   ),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 8),
                   IconButton(
+                    tooltip: 'Next Month',
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     icon: Icon(
@@ -293,17 +533,12 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                       size: 24,
                       color: textPrimary,
                     ),
-                    onPressed: () {},
+                    onPressed: () => _changeMonth(1),
                   ),
                 ],
               ),
               OutlinedButton(
-                onPressed: () {
-                  setState(() {
-                    _selectedDay = 25;
-                    _showDayDetails = true;
-                  });
-                },
+                onPressed: _goToToday,
                 style: OutlinedButton.styleFrom(
                   foregroundColor: textPrimary,
                   side: BorderSide(color: borderColor),
@@ -324,10 +559,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: 12),
-
-          // ── 3. CALENDAR GRID CARD ──────────────────────────────────────────
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -337,10 +569,9 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
             ),
             child: Column(
               children: [
-                // Weekday Header: Sun, Mon, Tue, Wed, Thu, Fri, Sat
-                Row(
+                const Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: const [
+                  children: [
                     _WeekdayHeader('Sun'),
                     _WeekdayHeader('Mon'),
                     _WeekdayHeader('Tue'),
@@ -350,145 +581,12 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                     _WeekdayHeader('Sat'),
                   ],
                 ),
-
                 const SizedBox(height: 10),
-
-                // Row 1: 30(other), 31(other), 1, 2, 3, 4(green dot), 5
-                Row(
-                  children: [
-                    _buildDayCell(
-                      day: 30,
-                      isOtherMonth: true,
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 31,
-                      isOtherMonth: true,
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 1, textPrimary: textPrimary),
-                    _buildDayCell(day: 2, textPrimary: textPrimary),
-                    _buildDayCell(day: 3, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 4,
-                      dots: [const Color(0xFF16A34A)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 5, textPrimary: textPrimary),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                // Row 2: 6, 7, 8(orange dot), 9, 10, 11(green dot), 12
-                Row(
-                  children: [
-                    _buildDayCell(day: 6, textPrimary: textPrimary),
-                    _buildDayCell(day: 7, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 8,
-                      dots: [const Color(0xFFF59E0B)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 9, textPrimary: textPrimary),
-                    _buildDayCell(day: 10, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 11,
-                      dots: [const Color(0xFF16A34A)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 12, textPrimary: textPrimary),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                // Row 3: 13, 14, 15(blue dot), 16(green dot), 17(orange dot), 18, 19
-                Row(
-                  children: [
-                    _buildDayCell(day: 13, textPrimary: textPrimary),
-                    _buildDayCell(day: 14, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 15,
-                      dots: [const Color(0xFF2563EB)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 16,
-                      dots: [const Color(0xFF16A34A)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 17,
-                      dots: [const Color(0xFFF59E0B)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 18, textPrimary: textPrimary),
-                    _buildDayCell(day: 19, textPrimary: textPrimary),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                // Row 4: 20, 21, 22, 23, 24, 25(SELECTED), 26
-                Row(
-                  children: [
-                    _buildDayCell(day: 20, textPrimary: textPrimary),
-                    _buildDayCell(day: 21, textPrimary: textPrimary),
-                    _buildDayCell(day: 22, textPrimary: textPrimary),
-                    _buildDayCell(day: 23, textPrimary: textPrimary),
-                    _buildDayCell(day: 24, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 25,
-                      isSelected: true,
-                      dots: [const Color(0xFF16A34A), const Color(0xFFF59E0B)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 26, textPrimary: textPrimary),
-                  ],
-                ),
-
-                const SizedBox(height: 6),
-
-                // Row 5: 27, 28(blue dot), 29(blue dot), 30, 1(other), 2(other), 3(other)
-                Row(
-                  children: [
-                    _buildDayCell(day: 27, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 28,
-                      dots: [const Color(0xFF2563EB)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 29,
-                      dots: [const Color(0xFF2563EB)],
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(day: 30, textPrimary: textPrimary),
-                    _buildDayCell(
-                      day: 1,
-                      isOtherMonth: true,
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 2,
-                      isOtherMonth: true,
-                      textPrimary: textPrimary,
-                    ),
-                    _buildDayCell(
-                      day: 3,
-                      isOtherMonth: true,
-                      textPrimary: textPrimary,
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 16),
-
-                // Legend Row: Approved, Pending, Upcoming, Conflict
-                Row(
+                ...rows,
+                const SizedBox(height: 14),
+                const Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: const [
+                  children: [
                     _LegendDot(color: Color(0xFF16A34A), label: 'Approved'),
                     _LegendDot(color: Color(0xFFF59E0B), label: 'Pending'),
                     _LegendDot(color: Color(0xFF2563EB), label: 'Upcoming'),
@@ -498,10 +596,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               ],
             ),
           ),
-
           const SizedBox(height: 16),
-
-          // ── 4. LOWER CARD (TOGGLES BETWEEN SCREEN 1 & SCREEN 2) ───────────
           if (_showDayDetails)
             _buildDayLeavesCard(
               cardBg: cardBg,
@@ -516,18 +611,13 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               borderColor: borderColor,
               textPrimary: textPrimary,
               textSecondary: textSecondary,
-              isDark: isDark,
             ),
-
           const SizedBox(height: 16),
         ],
       ),
     );
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  //  SCREEN 2 LOWER CARD: "25 September 2026 • Friday"
-  // ───────────────────────────────────────────────────────────────────────────
   Widget _buildDayLeavesCard({
     required Color cardBg,
     required Color borderColor,
@@ -535,6 +625,9 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
     required Color textSecondary,
     required bool isDark,
   }) {
+    final dayLabel = DateFormat('d MMMM yyyy • EEEE').format(_selectedDate);
+    final dayApps = _applicationsForDay(_selectedDate);
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -545,7 +638,6 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header: Date & Close Button
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -558,7 +650,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    '$_selectedDay September 2026 • Friday',
+                    dayLabel,
                     style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
@@ -577,164 +669,66 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               ),
             ],
           ),
-
           const SizedBox(height: 14),
-
-          // Item 1: Mr. Tanvir Hasan (Approved)
-          _buildDayFacultyItem(
-            name: 'Mr. Tanvir Hasan',
-            designation: 'Lecturer',
-            status: 'Approved',
-            statusColor: const Color(0xFF16A34A),
-            statusBg: isDark
-                ? const Color(0xFF064E3B).withValues(alpha: 0.5)
-                : const Color(0xFFDCFCE7),
-            detailText: 'Medical Leave • 2 Days\n(25 Sep – 26 Sep, 2026)',
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-            isDark: isDark,
-            onTap: () {
-              Navigator.pushNamed(context, AppRoutes.headRequestDetails);
-            },
-          ),
-
-          const SizedBox(height: 14),
-          Divider(
-            height: 1,
-            color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
-          ),
-          const SizedBox(height: 14),
-
-          // Item 2: Dr. Farhana Yasmin (Pending)
-          _buildDayFacultyItem(
-            name: 'Dr. Farhana Yasmin',
-            designation: 'Associate Professor',
-            status: 'Pending',
-            statusColor: const Color(0xFFD97706),
-            statusBg: isDark
-                ? const Color(0xFF451A03).withValues(alpha: 0.5)
-                : const Color(0xFFFEF3C7),
-            detailText: 'Earned Leave • 5 Days\n(28 Sep – 02 Oct, 2026)',
-            textPrimary: textPrimary,
-            textSecondary: textSecondary,
-            isDark: isDark,
-            onTap: () {
-              Navigator.pushNamed(context, AppRoutes.headRequestDetails);
-            },
-          ),
+          if (dayApps.isEmpty)
+            Text(
+              'No department leave applications scheduled for this date.',
+              style: TextStyle(fontSize: 13, color: textSecondary),
+            )
+          else
+            ...dayApps.map((app) {
+              final isApproved = app.status == 'approved';
+              final statusColor = isApproved
+                  ? const Color(0xFF16A34A)
+                  : const Color(0xFFD97706);
+              final statusBg = isApproved
+                  ? (isDark
+                        ? const Color(0xFF064E3B).withValues(alpha: 0.5)
+                        : const Color(0xFFDCFCE7))
+                  : (isDark
+                        ? const Color(0xFF78350F).withValues(alpha: 0.4)
+                        : const Color(0xFFFEF3C7));
+              final range =
+                  '${DateFormat('d MMM').format(app.startDate)} – ${DateFormat('d MMM, yyyy').format(app.endDate)}';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _buildDayFacultyItem(
+                  name: app.applicantName,
+                  designation: app.applicantEmployeeId,
+                  status: app.status[0].toUpperCase() + app.status.substring(1),
+                  statusColor: statusColor,
+                  statusBg: statusBg,
+                  detailText:
+                      '${app.leaveTypeName} • ${app.totalDays} Day(s)\n($range)',
+                  textPrimary: textPrimary,
+                  textSecondary: textSecondary,
+                  isDark: isDark,
+                ),
+              );
+            }),
         ],
       ),
     );
   }
 
-  Widget _buildDayFacultyItem({
-    required String name,
-    required String designation,
-    required String status,
-    required Color statusColor,
-    required Color statusBg,
-    required String detailText,
-    required Color textPrimary,
-    required Color textSecondary,
-    required bool isDark,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF334155) : const Color(0xFFF1F5F9),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(Icons.person, size: 20, color: textPrimary),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      name,
-                      style: TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w700,
-                        color: textPrimary,
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2.5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: statusBg,
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        status,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: statusColor,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 1),
-                Text(
-                  designation,
-                  style: TextStyle(fontSize: 12, color: textSecondary),
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      Icons.calendar_today_outlined,
-                      size: 14,
-                      color: textSecondary,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        detailText,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: textSecondary,
-                          height: 1.3,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  //  SCREEN 1 LOWER CARD: "Department Overview (Sep)"
-  // ───────────────────────────────────────────────────────────────────────────
   Widget _buildDepartmentOverviewCard({
     required Color cardBg,
     required Color borderColor,
     required Color textPrimary,
     required Color textSecondary,
-    required bool isDark,
   }) {
+    final monthName = DateFormat('MMM').format(_focusedMonth);
+    final monthApps = _deptApplications.where((a) {
+      return (a.startDate.year == _focusedMonth.year &&
+              a.startDate.month == _focusedMonth.month) ||
+          (a.endDate.year == _focusedMonth.year &&
+              a.endDate.month == _focusedMonth.month);
+    }).toList();
+    final approvedCount = monthApps.where((a) => a.status == 'approved').length;
+    final pendingCount = monthApps
+        .where((a) => a.status == 'pending' || a.status == 'forwarded')
+        .length;
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -746,9 +740,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           GestureDetector(
-            onTap: () {
-              setState(() => _showDayDetails = true);
-            },
+            onTap: () => setState(() => _showDayDetails = true),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -761,7 +753,7 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'Department Overview (Sep)',
+                      'Department Overview ($monthName)',
                       style: TextStyle(
                         fontSize: 14.5,
                         fontWeight: FontWeight.w700,
@@ -770,41 +762,28 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                     ),
                   ],
                 ),
-                Icon(
-                  Icons.chevron_right_rounded,
-                  size: 20,
-                  color: textSecondary,
-                ),
+                Icon(Icons.chevron_right_rounded, size: 20, color: textSecondary),
               ],
             ),
           ),
-
-          const SizedBox(height: 16),
-
-          // 4 Stat Columns: 12 Total, 7 Approved, 3 Pending, 2 Upcoming
+          const SizedBox(height: 12),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildStatCol('12', 'Total Leave', textPrimary, textSecondary),
-              _buildDivider(isDark),
-              _buildStatCol(
-                '7',
-                'Approved',
-                const Color(0xFF16A34A),
-                textSecondary,
+              _OverviewStat(
+                label: 'Faculty',
+                value: '${_deptFaculty.length}',
+                color: textPrimary,
               ),
-              _buildDivider(isDark),
-              _buildStatCol(
-                '3',
-                'Pending',
-                const Color(0xFFF59E0B),
-                textSecondary,
+              _OverviewStat(
+                label: 'Approved',
+                value: '$approvedCount',
+                color: const Color(0xFF16A34A),
               ),
-              _buildDivider(isDark),
-              _buildStatCol(
-                '2',
-                'Upcoming',
-                const Color(0xFF2563EB),
-                textSecondary,
+              _OverviewStat(
+                label: 'Pending',
+                value: '$pendingCount',
+                color: const Color(0xFFF59E0B),
               ),
             ],
           ),
@@ -813,65 +792,22 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
     );
   }
 
-  Widget _buildStatCol(
-    String value,
-    String label,
-    Color valColor,
-    Color textSecondary,
-  ) {
-    return Expanded(
-      child: Column(
-        children: [
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-              color: valColor,
-            ),
-          ),
-          const SizedBox(height: 3),
-          Text(
-            label,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
-              color: textSecondary,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDivider(bool isDark) {
-    return Container(
-      width: 1,
-      height: 32,
-      color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
-    );
-  }
-
-  // ───────────────────────────────────────────────────────────────────────────
-  //  VIEW 3: FILTERS & UPCOMING LEAVES VIEW (SCREEN 3)
-  // ───────────────────────────────────────────────────────────────────────────
   Widget _buildFilterView({
+    required bool isDark,
     required Color cardBg,
     required Color borderColor,
     required Color textPrimary,
     required Color textSecondary,
     required Color primaryColor,
-    required bool isDark,
-    required Color subtleBg,
   }) {
+    final filtered = _filteredApplications;
+
     return SingleChildScrollView(
       physics: const ClampingScrollPhysics(),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── 1. FILTERS CARD ───────────────────────────────────────────────
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -882,219 +818,56 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                GestureDetector(
-                  onTap: () {
-                    setState(
-                      () => _isFilterCardExpanded = !_isFilterCardExpanded,
-                    );
-                  },
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.tune_rounded,
-                            size: 18,
-                            color: textPrimary,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Filters',
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: textPrimary,
-                            ),
-                          ),
-                        ],
-                      ),
-                      Icon(
-                        _isFilterCardExpanded
-                            ? Icons.keyboard_arrow_up_rounded
-                            : Icons.keyboard_arrow_down_rounded,
-                        size: 22,
-                        color: textSecondary,
-                      ),
-                    ],
+                Text(
+                  'Filter Department Leaves',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: textPrimary,
                   ),
                 ),
-
-                if (_isFilterCardExpanded) ...[
-                  const SizedBox(height: 16),
-
-                  // Leave Status
-                  Text(
-                    'Leave Status',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        _buildStatusChip('All', primaryColor, isDark),
-                        const SizedBox(width: 8),
-                        _buildStatusChip('Approved', primaryColor, isDark),
-                        const SizedBox(width: 8),
-                        _buildStatusChip('Pending', primaryColor, isDark),
-                        const SizedBox(width: 8),
-                        _buildStatusChip('Upcoming', primaryColor, isDark),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  // Leave Type Dropdown
-                  Text(
-                    'Leave Type',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF0F172A)
-                          : const Color(0xFFF8FAFC),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: ['All', 'Approved', 'Pending', 'Upcoming'].map((f) {
+                    final selected = _selectedStatusFilter == f;
+                    return ChoiceChip(
+                      label: Text(f),
+                      selected: selected,
+                      onSelected: (_) =>
+                          setState(() => _selectedStatusFilter = f),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: _selectedLeaveType,
+                  decoration: InputDecoration(
+                    labelText: 'Leave Type',
+                    border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: borderColor),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          _selectedLeaveType,
-                          style: TextStyle(fontSize: 13.5, color: textPrimary),
-                        ),
-                        Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          size: 20,
-                          color: textSecondary,
-                        ),
-                      ],
                     ),
                   ),
-
-                  const SizedBox(height: 16),
-
-                  // Faculty Dropdown
-                  Text(
-                    'Faculty',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: textSecondary,
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'All Leave Types',
+                      child: Text('All Leave Types'),
                     ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF0F172A)
-                          : const Color(0xFFF8FAFC),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: borderColor),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          _selectedFaculty,
-                          style: TextStyle(fontSize: 13.5, color: textPrimary),
-                        ),
-                        Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          size: 20,
-                          color: textSecondary,
-                        ),
-                      ],
-                    ),
-                  ),
-
-                  const SizedBox(height: 18),
-
-                  // Buttons: Apply Filter & Reset
-                  Row(
-                    children: [
-                      Expanded(
-                        flex: 3,
-                        child: ElevatedButton(
-                          onPressed: () {
-                            AppHelpers.showSuccess(context, 'Filters applied.');
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: primaryColor,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                          child: const Text(
-                            'Apply Filter',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        flex: 2,
-                        child: OutlinedButton(
-                          onPressed: () {
-                            setState(() {
-                              _selectedStatusFilter = 'All';
-                              _selectedLeaveType = 'All Leave Types';
-                              _selectedFaculty = 'All Faculty';
-                            });
-                          },
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor: textPrimary,
-                            side: BorderSide(color: borderColor),
-                            padding: const EdgeInsets.symmetric(vertical: 13),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                          ),
-                          child: const Text(
-                            'Reset',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                    DropdownMenuItem(value: 'Casual', child: Text('Casual Leave')),
+                    DropdownMenuItem(value: 'Medical', child: Text('Medical Leave')),
+                    DropdownMenuItem(value: 'Earned', child: Text('Earned Leave')),
+                    DropdownMenuItem(value: 'Duty', child: Text('Duty Leave')),
+                    DropdownMenuItem(value: 'Study', child: Text('Study Leave')),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) setState(() => _selectedLeaveType = val);
+                  },
+                ),
               ],
             ),
           ),
-
-          const SizedBox(height: 20),
-
-          // ── 2. UPCOMING LEAVES SECTION ────────────────────────────────────
+          const SizedBox(height: 16),
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -1108,115 +881,142 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Row(
-                      children: [
-                        const Icon(
-                          Icons.calendar_month_rounded,
-                          size: 18,
-                          color: Color(0xFF16A34A),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Upcoming Leaves',
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: textPrimary,
-                          ),
-                        ),
-                      ],
-                    ),
-                    GestureDetector(
-                      onTap: () {},
-                      child: const Text(
-                        'View All',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF1E40AF),
-                        ),
+                    Text(
+                      'Matching Leaves (${filtered.length})',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: textPrimary,
                       ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pushReplacementNamed(
+                          context,
+                          AppRoutes.headRequests,
+                        );
+                      },
+                      child: const Text('View All'),
                     ),
                   ],
                 ),
-
-                const SizedBox(height: 16),
-
-                // Item 1: Dr. Anwar Hussain (Upcoming)
-                _buildUpcomingItem(
-                  name: 'Dr. Anwar Hussain',
-                  subtitle: 'Duty Leave • 1 Day\n28 Sep, 2026',
-                  status: 'Upcoming',
-                  statusColor: const Color(0xFF2563EB),
-                  statusBg: isDark
-                      ? const Color(0xFF1E3A8A).withValues(alpha: 0.4)
-                      : const Color(0xFFEFF6FF),
-                  textPrimary: textPrimary,
-                  textSecondary: textSecondary,
-                  isDark: isDark,
-                ),
-
-                const SizedBox(height: 14),
-                Divider(
-                  height: 1,
-                  color: isDark
-                      ? const Color(0xFF334155)
-                      : const Color(0xFFF1F5F9),
-                ),
-                const SizedBox(height: 14),
-
-                // Item 2: Ms. Sadia Karim (Upcoming)
-                _buildUpcomingItem(
-                  name: 'Ms. Sadia Karim',
-                  subtitle: 'Medical Leave • 2 Days\n30 Sep – 01 Oct, 2026',
-                  status: 'Upcoming',
-                  statusColor: const Color(0xFF2563EB),
-                  statusBg: isDark
-                      ? const Color(0xFF1E3A8A).withValues(alpha: 0.4)
-                      : const Color(0xFFEFF6FF),
-                  textPrimary: textPrimary,
-                  textSecondary: textSecondary,
-                  isDark: isDark,
-                ),
-
-                const SizedBox(height: 14),
-                Divider(
-                  height: 1,
-                  color: isDark
-                      ? const Color(0xFF334155)
-                      : const Color(0xFFF1F5F9),
-                ),
-                const SizedBox(height: 14),
-
-                // Item 3: Dr. Farhana Yasmin (Pending)
-                _buildUpcomingItem(
-                  name: 'Dr. Farhana Yasmin',
-                  subtitle: 'Earned Leave • 5 Days\n28 Sep – 02 Oct, 2026',
-                  status: 'Pending',
-                  statusColor: const Color(0xFFD97706),
-                  statusBg: isDark
-                      ? const Color(0xFF451A03).withValues(alpha: 0.5)
-                      : const Color(0xFFFEF3C7),
-                  textPrimary: textPrimary,
-                  textSecondary: textSecondary,
-                  isDark: isDark,
-                ),
+                const SizedBox(height: 8),
+                if (filtered.isEmpty)
+                  Text(
+                    'No leave applications match the selected filters.',
+                    style: TextStyle(color: textSecondary, fontSize: 13),
+                  )
+                else
+                  ...filtered.take(20).map((app) {
+                    final range =
+                        '${DateFormat('d MMM').format(app.startDate)} – ${DateFormat('d MMM, yyyy').format(app.endDate)}';
+                    final isApproved = app.status == 'approved';
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: _buildUpcomingItem(
+                        name: app.applicantName,
+                        subtitle:
+                            '${app.leaveTypeName} • ${app.totalDays} Day(s)\n$range',
+                        status:
+                            app.status[0].toUpperCase() + app.status.substring(1),
+                        statusColor: isApproved
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFF2563EB),
+                        statusBg: isDark
+                            ? const Color(0xFF1E3A8A).withValues(alpha: 0.4)
+                            : const Color(0xFFEFF6FF),
+                        textPrimary: textPrimary,
+                        textSecondary: textSecondary,
+                        isDark: isDark,
+                      ),
+                    );
+                  }),
               ],
             ),
           ),
-
-          const SizedBox(height: 20),
         ],
       ),
     );
   }
 
-  Widget _buildUpcomingItem({
+  Widget _buildDayCell({
+    required int day,
+    required DateTime date,
+    bool isOtherMonth = false,
+    List<Color> dots = const [],
+    required Color textPrimary,
+  }) {
+    final isSelected =
+        !isOtherMonth &&
+        date.year == _selectedDate.year &&
+        date.month == _selectedDate.month &&
+        date.day == _selectedDate.day;
+
+    return Expanded(
+      child: GestureDetector(
+        onTap: isOtherMonth
+            ? null
+            : () {
+                setState(() {
+                  _selectedDate = date;
+                  _showDayDetails = true;
+                });
+              },
+        child: Container(
+          height: 44,
+          margin: const EdgeInsets.symmetric(horizontal: 2),
+          decoration: BoxDecoration(
+            color: isSelected ? const Color(0xFF0B6A41) : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                '$day',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                  color: isSelected
+                      ? Colors.white
+                      : isOtherMonth
+                      ? textPrimary.withValues(alpha: 0.3)
+                      : textPrimary,
+                ),
+              ),
+              if (dots.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: dots
+                      .map(
+                        (c) => Container(
+                          width: 5,
+                          height: 5,
+                          margin: const EdgeInsets.symmetric(horizontal: 1),
+                          decoration: BoxDecoration(
+                            color: isSelected ? Colors.white : c,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      )
+                      .toList(),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDayFacultyItem({
     required String name,
-    required String subtitle,
+    required String designation,
     required String status,
     required Color statusColor,
     required Color statusBg,
+    required String detailText,
     required Color textPrimary,
     required Color textSecondary,
     required bool isDark,
@@ -1241,12 +1041,15 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      fontSize: 14.5,
-                      fontWeight: FontWeight.w700,
-                      color: textPrimary,
+                  Expanded(
+                    child: Text(
+                      name,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: textPrimary,
+                      ),
                     ),
                   ),
                   Container(
@@ -1269,13 +1072,20 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
                   ),
                 ],
               ),
-              const SizedBox(height: 2),
+              if (designation.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  designation,
+                  style: TextStyle(fontSize: 12, color: textSecondary),
+                ),
+              ],
+              const SizedBox(height: 4),
               Text(
-                subtitle,
+                detailText,
                 style: TextStyle(
-                  fontSize: 12,
-                  color: textSecondary,
-                  height: 1.3,
+                  fontSize: 12.5,
+                  color: textPrimary,
+                  height: 1.35,
                 ),
               ),
             ],
@@ -1285,156 +1095,42 @@ class _DeptCalendarScreenState extends State<DeptCalendarScreen> {
     );
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  //  HELPER WIDGETS
-  // ───────────────────────────────────────────────────────────────────────────
-  Widget _buildSegmentTab(String title, Color primaryColor) {
-    final isSelected = _selectedViewTab == title;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          setState(() => _selectedViewTab = title);
-        },
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: isSelected ? primaryColor : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Center(
-            child: Text(
-              title,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-                color: isSelected ? Colors.white : const Color(0xFF475569),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDayCell({
-    required int day,
-    bool isOtherMonth = false,
-    bool isSelected = false,
-    List<Color> dots = const [],
+  Widget _buildUpcomingItem({
+    required String name,
+    required String subtitle,
+    required String status,
+    required Color statusColor,
+    required Color statusBg,
     required Color textPrimary,
+    required Color textSecondary,
+    required bool isDark,
   }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          if (!isOtherMonth) {
-            setState(() {
-              _selectedDay = day;
-              _showDayDetails = true;
-            });
-          }
-        },
-        child: Container(
-          height: 48,
-          decoration: isSelected
-              ? BoxDecoration(
-                  color: const Color(0xFF1B4332), // Dark green selected
-                  borderRadius: BorderRadius.circular(10),
-                )
-              : null,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Text(
-                '$day',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
-                  color: isSelected
-                      ? Colors.white
-                      : isOtherMonth
-                      ? (isDark
-                            ? const Color(0xFF475569)
-                            : const Color(0xFFCBD5E1))
-                      : textPrimary,
-                ),
-              ),
-              const SizedBox(height: 3),
-              if (dots.isNotEmpty)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: dots
-                      .map(
-                        (c) => Container(
-                          width: 4.5,
-                          height: 4.5,
-                          margin: const EdgeInsets.symmetric(horizontal: 1.5),
-                          decoration: BoxDecoration(
-                            color: c,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                )
-              else
-                const SizedBox(height: 4.5),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusChip(String label, Color primaryColor, bool isDark) {
-    final isSelected = _selectedStatusFilter == label;
-    return GestureDetector(
-      onTap: () => setState(() => _selectedStatusFilter = label),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-        decoration: BoxDecoration(
-          color: isSelected
-              ? primaryColor
-              : (isDark ? const Color(0xFF1E293B) : Colors.white),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected
-                ? primaryColor
-                : (isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0)),
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: isSelected ? FontWeight.w700 : FontWeight.w600,
-            color: isSelected ? Colors.white : const Color(0xFF475569),
-          ),
-        ),
-      ),
+    return _buildDayFacultyItem(
+      name: name,
+      designation: '',
+      status: status,
+      statusColor: statusColor,
+      statusBg: statusBg,
+      detailText: subtitle,
+      textPrimary: textPrimary,
+      textSecondary: textSecondary,
+      isDark: isDark,
     );
   }
 }
 
 class _WeekdayHeader extends StatelessWidget {
-  final String text;
-  const _WeekdayHeader(this.text);
+  final String label;
+  const _WeekdayHeader(this.label);
 
   @override
   Widget build(BuildContext context) {
-    return Expanded(
-      child: Center(
-        child: Text(
-          text,
-          style: const TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            color: Color(0xFF475569),
-          ),
-        ),
+    return Text(
+      label,
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+        color: Color(0xFF64748B),
       ),
     );
   }
@@ -1448,21 +1144,47 @@ class _LegendDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 6,
-          height: 6,
+          width: 8,
+          height: 8,
           decoration: BoxDecoration(color: color, shape: BoxShape.circle),
         ),
         const SizedBox(width: 5),
         Text(
           label,
-          style: const TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w500,
-            color: Color(0xFF64748B),
+          style: const TextStyle(fontSize: 11.5, color: Color(0xFF64748B)),
+        ),
+      ],
+    );
+  }
+}
+
+class _OverviewStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+  const _OverviewStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w800,
+            color: color,
           ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(fontSize: 12, color: Color(0xFF64748B)),
         ),
       ],
     );

@@ -7,19 +7,34 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/leave_application_model.dart';
+import '../../repositories/auth_repository.dart';
+import '../../repositories/leave_repository.dart';
 import '../../widgets/app_avatar.dart';
 
 class HeadLeaveRequestScreen extends StatefulWidget {
   final Map<String, dynamic>? requestData;
+  final LeaveRepository? leaveRepository;
+  final AuthRepository? authRepository;
 
-  const HeadLeaveRequestScreen({super.key, this.requestData});
+  const HeadLeaveRequestScreen({
+    super.key,
+    this.requestData,
+    this.leaveRepository,
+    this.authRepository,
+  });
 
   @override
   State<HeadLeaveRequestScreen> createState() => _HeadLeaveRequestScreenState();
 }
 
 class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
+  late final LeaveRepository _leaveRepo =
+      widget.leaveRepository ?? LeaveRepository();
+  late final AuthRepository _authRepo =
+      widget.authRepository ?? AuthRepository();
   final _commentCtrl = TextEditingController();
+  bool _isSubmitting = false;
 
   @override
   void dispose() {
@@ -27,7 +42,17 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
     super.dispose();
   }
 
+  Map<String, dynamic> _resolveArgs(BuildContext context) {
+    final rawArgs = ModalRoute.of(context)?.settings.arguments;
+    return widget.requestData ??
+        (rawArgs is Map<String, dynamic>
+            ? rawArgs
+            : (rawArgs is String ? {'id': rawArgs, 'applicationId': rawArgs} : {}));
+  }
+
   void _onReject() {
+    if (_isSubmitting) return;
+    final args = _resolveArgs(context);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -45,10 +70,9 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
               backgroundColor: const Color(0xFFDC2626),
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
-              AppHelpers.showError(context, 'Leave request has been rejected.');
-              Navigator.pop(context, false);
+              await _submitDecision(approved: false, args: args);
             },
             child: const Text('Confirm Reject'),
           ),
@@ -57,12 +81,71 @@ class _HeadLeaveRequestScreenState extends State<HeadLeaveRequestScreen> {
     );
   }
 
-  void _onApprove() {
-    AppHelpers.showSuccess(
-      context,
-      'Leave approved and endorsed to Dean / Registrar!',
-    );
-    Navigator.pop(context, true);
+  Future<void> _onApprove() async {
+    if (_isSubmitting) return;
+    final args = _resolveArgs(context);
+    await _submitDecision(approved: true, args: args);
+  }
+
+  Future<void> _submitDecision({
+    required bool approved,
+    required Map<String, dynamic> args,
+  }) async {
+    setState(() => _isSubmitting = true);
+    try {
+      final headUser = await _authRepo.getCurrentUserProfile();
+      final headUid = headUser?.uid ?? _authRepo.currentUserId ?? '';
+      final model = args['model'] as LeaveApplicationModel?;
+      final appId = model?.id ?? (args['id'] as String? ?? '');
+      final appDeptId =
+          (model?.departmentId ?? (args['departmentId'] as String? ?? '')).trim();
+      final headDeptId = headUser?.departmentId.trim() ?? '';
+
+      if (headUser != null &&
+          headDeptId.isNotEmpty &&
+          appDeptId.isNotEmpty &&
+          headDeptId != appDeptId) {
+        throw Exception('Cross-department action denied.');
+      }
+
+      if (appId.isNotEmpty && headUid.isNotEmpty) {
+        final comment = _commentCtrl.text.trim();
+        if (approved) {
+          await _leaveRepo.forwardLeave(
+            applicationId: appId,
+            headUid: headUid,
+            comment: comment.isNotEmpty
+                ? comment
+                : 'Leave approved and endorsed to Dean / Registrar.',
+          );
+        } else {
+          await _leaveRepo.headRejectLeave(
+            applicationId: appId,
+            headUid: headUid,
+            comment: comment.isNotEmpty
+                ? comment
+                : 'Leave request rejected by Department Head.',
+          );
+        }
+      }
+
+      if (!mounted) return;
+      if (approved) {
+        AppHelpers.showSuccess(
+          context,
+          'Leave approved and endorsed to Dean / Registrar!',
+        );
+      } else {
+        AppHelpers.showError(context, 'Leave request has been rejected.');
+      }
+      Navigator.pop(context, approved);
+    } catch (e) {
+      if (mounted) {
+        AppHelpers.showError(context, 'Action denied: $e');
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override

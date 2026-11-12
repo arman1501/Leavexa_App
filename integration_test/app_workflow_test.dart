@@ -599,25 +599,27 @@ void main() {
       await tester.tap(find.text('Login'));
       await tester.pumpAndSettle();
 
-      // Successfully routed to Registrar Dashboard
+      // Successfully routed to dedicated Registrar Dashboard (zero Admin controls)
       expect(find.byType(RegistrarDashboard), findsOneWidget);
+      expect(find.text('Registrar Dashboard'), findsOneWidget);
+      expect(find.text('Create Staff Account (Head / Registrar)'), findsNothing);
 
       // Navigate to Profile & Log out
       await tester.tap(find.text('Profile'));
       await tester.pumpAndSettle();
-      expect(find.byType(AdminProfileScreen), findsOneWidget);
+      expect(find.text('Registrar Profile'), findsOneWidget);
 
       await tester.scrollUntilVisible(
-        find.text('Log Out of Admin Portal'),
+        find.text('Log Out of Registrar Portal'),
         200.0,
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Log Out of Admin Portal'));
+      await tester.tap(find.text('Log Out of Registrar Portal'));
       await tester.pumpAndSettle();
 
       expect(
         find.text(
-          'Are you sure you want to log out of the Administrator Portal?',
+          'Are you sure you want to log out of the Registrar Portal?',
         ),
         findsOneWidget,
       );

@@ -3,25 +3,31 @@
 //  Pixel-perfect implementation of Department Head Console UI design
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
+import '../../models/leave_application_model.dart';
 import '../../repositories/auth_repository.dart';
 import '../../repositories/leave_repository.dart';
+import '../../repositories/user_repository.dart';
 import '../../widgets/app_avatar.dart';
 import '../../widgets/app_bottom_navigation.dart';
 
 class HeadDashboard extends StatefulWidget {
   final LeaveRepository? leaveRepository;
   final AuthRepository? authRepository;
+  final UserRepository? userRepository;
 
   const HeadDashboard({
     super.key,
     this.leaveRepository,
     this.authRepository,
+    this.userRepository,
   });
 
   @override
@@ -33,13 +39,24 @@ class _HeadDashboardState extends State<HeadDashboard> {
       widget.leaveRepository ?? LeaveRepository();
   late final AuthRepository _authRepo =
       widget.authRepository ?? AuthRepository();
+  late final UserRepository _userRepo =
+      widget.userRepository ?? UserRepository();
 
+  StreamSubscription<List<LeaveApplicationModel>>? _deptAppsSub;
   int _currentNavIndex = 0;
   String _selectedFilter = 'All';
   bool _hasFetchedReal = false;
+  bool _missingDeptAssignment = false;
   String _headName = 'Department Head';
+  String _deptId = '';
+  String _deptName = 'Academic Department';
   String? _headPhotoUrl;
+  int _approvedDeptCount = 0;
+  int _rejectedDeptCount = 0;
+  int _awayTodayCount = 0;
+  int _deptFacultyCount = 0;
   List<Map<String, dynamic>> _realPendingRequests = [];
+  List<Map<String, dynamic>> _realRecentDecisions = [];
 
   @override
   void initState() {
@@ -47,102 +64,185 @@ class _HeadDashboardState extends State<HeadDashboard> {
     _loadRealData();
   }
 
+  @override
+  void dispose() {
+    _deptAppsSub?.cancel();
+    super.dispose();
+  }
+
+  void _applyDepartmentApplications(List<LeaveApplicationModel> apps) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    final pendingApps = <LeaveApplicationModel>[];
+    final decidedApps = <LeaveApplicationModel>[];
+    int approved = 0;
+    int rejected = 0;
+    int awayToday = 0;
+
+    for (final a in apps) {
+      if (_deptId.isNotEmpty && a.departmentId != _deptId) continue;
+      if (a.isPending) {
+        pendingApps.add(a);
+      } else if (a.isForwarded || a.isApproved) {
+        approved++;
+        decidedApps.add(a);
+        if (a.isApproved) {
+          final s = DateTime(a.startDate.year, a.startDate.month, a.startDate.day);
+          final e = DateTime(a.endDate.year, a.endDate.month, a.endDate.day);
+          if (!today.isBefore(s) && !today.isAfter(e)) {
+            awayToday++;
+          }
+        }
+      } else if (a.isRejected) {
+        rejected++;
+        decidedApps.add(a);
+      }
+    }
+
+    final mappedPending = pendingApps.map((a) {
+      final startStr = DateFormat('dd MMM').format(a.startDate);
+      final endStr = DateFormat('dd MMM').format(a.endDate);
+      final fullDates =
+          '${DateFormat('dd MMM').format(a.startDate)} – ${DateFormat('dd MMM, yyyy').format(a.endDate)}';
+      return {
+        'id': a.id,
+        'applicantUid': a.applicantUid,
+        'departmentId': a.departmentId,
+        'facultyName': a.applicantName,
+        'facultyId': a.applicantEmployeeId,
+        'designation': 'Faculty Member • ${a.departmentName}',
+        'leaveType': a.leaveTypeName,
+        'accentColor': a.leaveTypeName.toLowerCase().contains('medical')
+            ? const Color(0xFFDC2626)
+            : const Color(0xFF16A34A),
+        'dateRange': '$startStr – $endStr',
+        'datesFull': fullDates,
+        'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
+        'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
+        'teachingCovered': 'Class coverage arranged',
+        'reason': a.reason,
+        'totalDaysNum': a.totalDays,
+        'model': a,
+      };
+    }).toList();
+
+    final mappedDecisions = decidedApps.take(5).map((a) {
+      final actionAt = a.headActionAt ?? a.appliedAt;
+      final dateLabel = DateFormat('dd MMM, hh:mm a').format(actionAt);
+      final endorsed = a.isForwarded || a.isApproved;
+      return {
+        'name': a.applicantName,
+        'leaveType': a.leaveTypeName,
+        'detail': endorsed
+            ? 'Endorsed to Registrar • $dateLabel'
+            : 'Rejected by Dept. Head • $dateLabel',
+        'status': endorsed ? 'Forwarded' : 'Rejected',
+        'isApproved': endorsed,
+      };
+    }).toList();
+
+    if (!mounted) return;
+    setState(() {
+      _realPendingRequests = mappedPending;
+      _realRecentDecisions = mappedDecisions;
+      _approvedDeptCount = approved;
+      _rejectedDeptCount = rejected;
+      _awayTodayCount = awayToday;
+      _hasFetchedReal = true;
+    });
+  }
+
   Future<void> _loadRealData() async {
     try {
       final user = await _authRepo.getCurrentUserProfile();
-      final deptId = user?.departmentId ?? 'dept_cse';
-      final apps = await _leaveRepo.departmentPending(deptId);
+      if (user == null || user.departmentId.trim().isEmpty) {
+        if (mounted) {
+          setState(() {
+            _missingDeptAssignment = true;
+            _realPendingRequests = [];
+            _realRecentDecisions = [];
+            _hasFetchedReal = true;
+          });
+        }
+        return;
+      }
+
+      final deptId = user.departmentId.trim();
+      final resolvedDeptName = user.departmentName.trim().isNotEmpty
+          ? user.departmentName.trim()
+          : (AppConstants.departmentIdToCanonicalName[deptId] ?? deptId);
+
       if (mounted) {
         setState(() {
-          if (user != null) {
-            _headName = user.fullName;
-            _headPhotoUrl = user.photoUrl;
+          _missingDeptAssignment = false;
+          _deptId = deptId;
+          _deptName = resolvedDeptName;
+          _headName = user.fullName.isNotEmpty ? user.fullName : 'Department Head';
+          _headPhotoUrl = user.photoUrl;
+        });
+      }
+
+      // Fetch department-scoped faculty count & applications strictly filtered by departmentId
+      try {
+        final deptUsers = await _userRepo.getFacultyByDepartment(deptId);
+        final activeFaculty = deptUsers
+            .where((u) => u.isFaculty && u.isActiveAndApproved && UserRepository.isGenuineUser(u))
+            .length;
+        if (mounted) {
+          setState(() => _deptFacultyCount = activeFaculty);
+        }
+      } catch (_) {}
+
+      final allDeptApps = await _leaveRepo.departmentApplications(deptId);
+      if (allDeptApps.isNotEmpty) {
+        _applyDepartmentApplications(allDeptApps);
+      } else {
+        final pendingOnly = await _leaveRepo.departmentPending(deptId);
+        _applyDepartmentApplications(pendingOnly);
+      }
+
+      await _deptAppsSub?.cancel();
+      _deptAppsSub = _leaveRepo.streamDepartmentApplications(deptId).listen(
+        (apps) {
+          if (apps.isNotEmpty || _hasFetchedReal) {
+            _applyDepartmentApplications(apps);
           }
-          _realPendingRequests = apps.map((a) {
-            final startStr = DateFormat('dd MMM').format(a.startDate);
-            final endStr = DateFormat('dd MMM').format(a.endDate);
-            return {
-              'id': a.id,
-              'applicantUid': a.applicantUid,
-              'facultyName': a.applicantName,
-              'designation': 'Faculty Member • ${a.departmentName}',
-              'leaveType': a.leaveTypeName,
-              'accentColor': const Color(0xFF16A34A),
-              'dateRange': '$startStr – $endStr',
-              'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
-              'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
-              'teachingCovered': 'Class coverage arranged',
-              'reason': a.reason,
-              'model': a,
-            };
-          }).toList();
+        },
+        onError: (_) {},
+      );
+    } catch (_) {
+      if (mounted && !_hasFetchedReal) {
+        setState(() {
+          _realPendingRequests = [];
+          _realRecentDecisions = [];
           _hasFetchedReal = true;
         });
       }
-    } catch (_) {}
+    }
   }
 
-  List<Map<String, dynamic>> get _displayPendingRequests =>
-      _hasFetchedReal ? _realPendingRequests : _pendingRequests;
+  List<Map<String, dynamic>> get _displayPendingRequests => _realPendingRequests;
 
-  final List<Map<String, dynamic>> _pendingRequests = [
-    {
-      'id': 'REQ-801',
-      'facultyName': 'Dr. Sarah Ahmed',
-      'designation': 'Assistant Professor • Software Engineering',
-      'leaveType': 'Casual Leave',
-      'accentColor': const Color(0xFF16A34A), // Green accent
-      'dateRange': '20 Sep – 22 Sep',
-      'duration': '3 Days',
-      'rxAttached': false,
-      'teachingCovered': 'Prof. M. Kamal (SE 402, 3 Classes)',
-      'reason':
-          'Attending international symposium & curriculum harmonization workshop at National Center.',
-    },
-    {
-      'id': 'REQ-802',
-      'facultyName': 'Mr. Tanvir Hasan',
-      'designation': 'Lecturer • Data Structures & Algorithms',
-      'leaveType': 'Medical Leave',
-      'accentColor': const Color(0xFFDC2626), // Red accent
-      'dateRange': '25 Sep – 26 Sep',
-      'duration': '2 Days',
-      'rxAttached': true,
-      'teachingCovered': 'Ms. Sadia Karim (CS 201 Lab)',
-      'reason':
-          'Medical consultation & dental treatment (physician certificate uploaded).',
-    },
-    {
-      'id': 'REQ-803',
-      'facultyName': 'Dr. Farhana Yasmin',
-      'designation': 'Associate Professor • AI Lab',
-      'leaveType': 'Earned Leave',
-      'accentColor': const Color(0xFF475569), // Slate accent
-      'dateRange': '28 Sep – 02 Oct',
-      'duration': '5 Days',
-      'rxAttached': false,
-      'teachingCovered': 'Dr. Anwar Hussain (AI 501)',
-      'reason':
-          'Family bereavement & urgent relocation matters for elder relatives.',
-    },
-  ];
+  List<Map<String, dynamic>> get _filteredPendingRequests {
+    if (_selectedFilter == 'All') return _displayPendingRequests;
+    return _displayPendingRequests.where((item) {
+      final type = (item['leaveType'] as String? ?? '').toLowerCase();
+      final days = (item['totalDaysNum'] as int?) ?? 1;
+      switch (_selectedFilter) {
+        case 'Medical':
+          return type.contains('medical') || type.contains('sick');
+        case 'Casual':
+          return type.contains('casual');
+        case 'Urgent':
+          return type.contains('medical') || days >= 3;
+        default:
+          return true;
+      }
+    }).toList();
+  }
 
-  final List<Map<String, dynamic>> _recentDecisions = [
-    {
-      'name': 'Dr. Tariqul Islam',
-      'leaveType': 'Casual Leave',
-      'detail': 'Endorsed to Dean • Today, 09:15 AM',
-      'status': 'Approved',
-      'isApproved': true,
-    },
-    {
-      'name': 'Engr. Naila Parveen',
-      'leaveType': 'Duty Leave',
-      'detail': 'Clarification requested • Yesterday',
-      'status': 'Returned',
-      'isApproved': false,
-    },
-  ];
+  List<Map<String, dynamic>> get _recentDecisions => _realRecentDecisions;
 
   void _onBottomNavTap(int index) {
     if (index == _currentNavIndex) return;
@@ -164,21 +264,28 @@ class _HeadDashboardState extends State<HeadDashboard> {
   }
 
   void _onEndorseRequest(int index) async {
-    final item = _pendingRequests[index];
+    final visible = _filteredPendingRequests;
+    if (index < 0 || index >= visible.length) return;
+    final item = visible[index];
     final result = await Navigator.pushNamed(
       context,
       AppRoutes.headReviewRequest,
       arguments: item,
     );
-    if (result == true || result == false) {
-      setState(() {
-        _pendingRequests.removeAt(index);
-      });
+    if (result != null) {
+      _loadRealData();
     }
   }
 
-  void _onViewDetails(Map<String, dynamic> item) {
-    Navigator.pushNamed(context, AppRoutes.headRequestDetails, arguments: item);
+  void _onViewDetails(Map<String, dynamic> item) async {
+    final result = await Navigator.pushNamed(
+      context,
+      AppRoutes.headRequestDetails,
+      arguments: item,
+    );
+    if (result != null) {
+      _loadRealData();
+    }
   }
 
   @override
@@ -279,38 +386,45 @@ class _HeadDashboardState extends State<HeadDashboard> {
                         ),
                         Row(
                           children: [
-                            // Notification bell with green badge dot
-                            Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                Container(
-                                  width: 40,
-                                  height: 40,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: isDark
-                                        ? const Color(0xFF1E293B)
-                                        : const Color(0xFFF1F5F9),
-                                  ),
-                                  child: Icon(
-                                    Icons.notifications_none_rounded,
-                                    size: 22,
-                                    color: textPrimary,
-                                  ),
-                                ),
-                                Positioned(
-                                  top: 10,
-                                  right: 10,
-                                  child: Container(
-                                    width: 8,
-                                    height: 8,
-                                    decoration: const BoxDecoration(
-                                      color: Color(0xFF16A34A),
+                            // Notification bell with badge dot
+                            GestureDetector(
+                              onTap: () => Navigator.pushNamed(
+                                context,
+                                AppRoutes.notifications,
+                              ),
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
                                       shape: BoxShape.circle,
+                                      color: isDark
+                                          ? const Color(0xFF1E293B)
+                                          : const Color(0xFFF1F5F9),
+                                    ),
+                                    child: Icon(
+                                      Icons.notifications_none_rounded,
+                                      size: 22,
+                                      color: textPrimary,
                                     ),
                                   ),
-                                ),
-                              ],
+                                  if (_displayPendingRequests.isNotEmpty)
+                                    Positioned(
+                                      top: 10,
+                                      right: 10,
+                                      child: Container(
+                                        width: 8,
+                                        height: 8,
+                                        decoration: const BoxDecoration(
+                                          color: Color(0xFF16A34A),
+                                          shape: BoxShape.circle,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                             const SizedBox(width: 10),
                             // Profile Avatar button
@@ -384,7 +498,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                               ),
                               const SizedBox(width: 5),
                               Text(
-                                'Autumn 2026 • 24 Faculty',
+                                '$_deptFacultyCount Faculty',
                                 style: TextStyle(
                                   fontSize: 10.5,
                                   fontWeight: FontWeight.w600,
@@ -403,7 +517,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
 
                     // ── 3. GREETING TITLE & DEPT SUBTITLE ────────────────────
                     Text(
-                      '${AppHelpers.getGreetingPrefix()}, Prof. Tariqul Islam',
+                      '${AppHelpers.getGreetingPrefix()}, $_headName',
                       style: TextStyle(
                         fontSize: 24,
                         fontWeight: FontWeight.w800,
@@ -413,13 +527,34 @@ class _HeadDashboardState extends State<HeadDashboard> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      'Department of Computer Science & Engineering',
+                      _deptName,
                       style: TextStyle(
                         fontSize: 13.5,
                         fontWeight: FontWeight.w500,
                         color: textSecondary,
                       ),
                     ),
+
+                    if (_missingDeptAssignment) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF2F2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: const Color(0xFFFCA5A5)),
+                        ),
+                        child: const Text(
+                          'Department assignment is missing or inconsistent on this Head account. Access is blocked.',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF991B1B),
+                          ),
+                        ),
+                      ),
+                    ],
 
                     const SizedBox(height: 18),
 
@@ -524,7 +659,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '34',
+                                  _approvedDeptCount < 10
+                                      ? '0$_approvedDeptCount'
+                                      : '$_approvedDeptCount',
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
@@ -536,7 +673,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                   fit: BoxFit.scaleDown,
                                   alignment: Alignment.centerLeft,
                                   child: Text(
-                                    'This Semester',
+                                    'Endorsed / Approved',
                                     style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w500,
@@ -549,7 +686,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        // Card 3: RETURNED
+                        // Card 3: REJECTED
                         Expanded(
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -565,7 +702,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  'RETURNED',
+                                  'REJECTED',
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -577,7 +714,9 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '03',
+                                  _rejectedDeptCount < 10
+                                      ? '0$_rejectedDeptCount'
+                                      : '$_rejectedDeptCount',
                                   style: TextStyle(
                                     fontSize: 22,
                                     fontWeight: FontWeight.w800,
@@ -589,7 +728,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                   fit: BoxFit.scaleDown,
                                   alignment: Alignment.centerLeft,
                                   child: Text(
-                                    'Follow-up Req.',
+                                    'Declined Req.',
                                     style: TextStyle(
                                       fontSize: 11,
                                       fontWeight: FontWeight.w500,
@@ -672,7 +811,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
-                                          '8 actionable',
+                                          '${_displayPendingRequests.length} actionable',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
@@ -755,7 +894,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                                         ),
                                         const SizedBox(height: 2),
                                         Text(
-                                          '3 away today',
+                                          '$_awayTodayCount away today',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
@@ -778,44 +917,62 @@ class _HeadDashboardState extends State<HeadDashboard> {
                     const SizedBox(height: 18),
 
                     // ── 6. FILTER CHIPS ROW ──────────────────────────────────
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      physics: const BouncingScrollPhysics(),
-                      child: Row(
-                        children: [
-                          _FilterChip(
-                            label: 'All (8)',
-                            isSelected: _selectedFilter == 'All',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'All'),
-                            isDark: isDark,
+                    Builder(
+                      builder: (context) {
+                        final allCount = _displayPendingRequests.length;
+                        final urgentCount = _displayPendingRequests.where((i) {
+                          final t = (i['leaveType'] as String? ?? '').toLowerCase();
+                          final d = (i['totalDaysNum'] as int?) ?? 1;
+                          return t.contains('medical') || d >= 3;
+                        }).length;
+                        final medCount = _displayPendingRequests.where((i) {
+                          final t = (i['leaveType'] as String? ?? '').toLowerCase();
+                          return t.contains('medical') || t.contains('sick');
+                        }).length;
+                        final casCount = _displayPendingRequests.where((i) {
+                          final t = (i['leaveType'] as String? ?? '').toLowerCase();
+                          return t.contains('casual');
+                        }).length;
+                        return SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          physics: const BouncingScrollPhysics(),
+                          child: Row(
+                            children: [
+                              _FilterChip(
+                                label: 'All ($allCount)',
+                                isSelected: _selectedFilter == 'All',
+                                onTap: () =>
+                                    setState(() => _selectedFilter = 'All'),
+                                isDark: isDark,
+                              ),
+                              const SizedBox(width: 8),
+                              _FilterChip(
+                                label: 'Urgent ($urgentCount)',
+                                isSelected: _selectedFilter == 'Urgent',
+                                onTap: () =>
+                                    setState(() => _selectedFilter = 'Urgent'),
+                                isDark: isDark,
+                              ),
+                              const SizedBox(width: 8),
+                              _FilterChip(
+                                label: 'Medical ($medCount)',
+                                isSelected: _selectedFilter == 'Medical',
+                                onTap: () =>
+                                    setState(() => _selectedFilter = 'Medical'),
+                                isDark: isDark,
+                              ),
+                              const SizedBox(width: 8),
+                              _FilterChip(
+                                label: 'Casual ($casCount)',
+                                isSelected: _selectedFilter == 'Casual',
+                                onTap: () =>
+                                    setState(() => _selectedFilter = 'Casual'),
+                                isDark: isDark,
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 8),
-                          _FilterChip(
-                            label: 'Urgent (2)',
-                            isSelected: _selectedFilter == 'Urgent',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'Urgent'),
-                            isDark: isDark,
-                          ),
-                          const SizedBox(width: 8),
-                          _FilterChip(
-                            label: 'Medical (1)',
-                            isSelected: _selectedFilter == 'Medical',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'Medical'),
-                            isDark: isDark,
-                          ),
-                          const SizedBox(width: 8),
-                          _FilterChip(
-                            label: 'Casual (5)',
-                            isSelected: _selectedFilter == 'Casual',
-                            onTap: () =>
-                                setState(() => _selectedFilter = 'Casual'),
-                            isDark: isDark,
-                          ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
 
                     const SizedBox(height: 22),
@@ -881,7 +1038,7 @@ class _HeadDashboardState extends State<HeadDashboard> {
                     const SizedBox(height: 14),
 
                     // ── 8. PENDING LEAVE CARDS LIST ──────────────────────────
-                    if (_displayPendingRequests.isEmpty)
+                    if (_filteredPendingRequests.isEmpty)
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(24),
@@ -921,11 +1078,11 @@ class _HeadDashboardState extends State<HeadDashboard> {
                       ListView.separated(
                         shrinkWrap: true,
                         physics: const NeverScrollableScrollPhysics(),
-                        itemCount: _displayPendingRequests.length,
+                        itemCount: _filteredPendingRequests.length,
                         separatorBuilder: (context, index) =>
                             const SizedBox(height: 14),
                         itemBuilder: (context, index) {
-                          final item = _displayPendingRequests[index];
+                          final item = _filteredPendingRequests[index];
                           final accentColor =
                               item['accentColor'] as Color? ??
                               const Color(0xFF16A34A);
@@ -1276,10 +1433,28 @@ class _HeadDashboardState extends State<HeadDashboard> {
 
                     const SizedBox(height: 10),
 
-                    ListView.separated(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      itemCount: _recentDecisions.length,
+                    if (_recentDecisions.isEmpty)
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: cardBg,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: borderColor),
+                        ),
+                        child: Text(
+                          'No recent department decisions yet.',
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: textSecondary,
+                          ),
+                        ),
+                      )
+                    else
+                      ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _recentDecisions.length,
                       separatorBuilder: (context, index) =>
                           const SizedBox(height: 8),
                       itemBuilder: (context, index) {

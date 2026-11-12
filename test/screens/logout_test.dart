@@ -320,7 +320,7 @@ void main() {
 
   group('Registrar Dashboard Architecture', () {
     testWidgets(
-      'RegistrarDashboard renders cleanly and embeds AdminDashboard',
+      'RegistrarDashboard renders dedicated console cleanly without Admin UI',
       (tester) async {
         tester.view.physicalSize = const Size(1000, 1800);
         tester.view.devicePixelRatio = 1.0;
@@ -332,6 +332,8 @@ void main() {
         await tester.pumpWidget(buildTestApp(const RegistrarDashboard()));
         await tester.pump();
         expect(find.byType(RegistrarDashboard), findsOneWidget);
+        expect(find.text('Registrar Dashboard'), findsOneWidget);
+        expect(find.text('Create Staff Account (Head / Registrar)'), findsNothing);
       },
     );
   });

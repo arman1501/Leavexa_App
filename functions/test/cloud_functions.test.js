@@ -201,6 +201,8 @@ class MockAuth {
   constructor() {
     this.users = {};
     this.customClaims = {};
+    this.deletedUids = [];
+    this.revokedUids = [];
   }
 
   async createUser(props) {
@@ -220,6 +222,16 @@ class MockAuth {
     }
     this.users[uid] = { ...this.users[uid], ...props };
     return this.users[uid];
+  }
+
+  async deleteUser(uid) {
+    this.deletedUids.push(uid);
+    delete this.users[uid];
+    delete this.customClaims[uid];
+  }
+
+  async revokeRefreshTokens(uid) {
+    this.revokedUids.push(uid);
   }
 
   async setCustomUserClaims(uid, claims) {
@@ -255,6 +267,7 @@ const {
   createStaffAccountHandler,
   setUserActiveHandler,
   syncUserCustomClaimsHandler,
+  transferFacultyDepartmentHandler,
 } = require('../src/roles');
 
 const {
@@ -263,6 +276,7 @@ const {
 } = require('../src/approvals');
 
 const {
+  submitLeaveApplicationHandler,
   processLeaveDeductionTransaction,
   onLeaveApplicationUpdateHandler,
 } = require('../src/leaves');
@@ -435,7 +449,7 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
 
       const result = await createStaffAccountHandler(
         {
-          email: 'head.cse@leavexa.edu',
+          email: 'head.cse.lu@gmail.com',
           password: 'SafePassword123!',
           fullName: 'Prof. CSE Head',
           employeeId: 'EMP-HEAD-CSE',
@@ -475,7 +489,7 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
 
       const result = await createStaffAccountHandler(
         {
-          email: 'registrar@leavexa.edu',
+          email: 'registrar.lu@gmail.com',
           password: 'SafePassword123!',
           fullName: 'University Registrar',
           employeeId: 'EMP-REG-01',
@@ -488,6 +502,51 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
       const claims = await mockAuth.getCustomUserClaims(result.uid);
       expect(claims.role).to.equal('registrar');
       expect(mockDb.store.users[result.uid].role).to.equal('registrar');
+    });
+
+    it('2.6b Rejects non-allowlisted emails and mismatched role/department in createStaffAccount', async () => {
+      const context = {
+        auth: {
+          uid: 'admin_uid',
+          token: { role: 'admin', email: 'admin.lu@gmail.com' },
+        },
+      };
+
+      try {
+        await createStaffAccountHandler(
+          {
+            email: 'rogue.head@gmail.com',
+            password: 'SafePassword123!',
+            fullName: 'Rogue Head',
+            employeeId: 'EMP-ROGUE-1',
+            role: 'department_head',
+            departmentId: 'dept_cse',
+            departmentName: 'Computer Science & Engineering',
+          },
+          context
+        );
+        expect.fail('Should reject non-allowlisted email');
+      } catch (err) {
+        expect(err.code).to.equal('permission-denied');
+      }
+
+      try {
+        await createStaffAccountHandler(
+          {
+            email: 'head.cse.lu@gmail.com',
+            password: 'SafePassword123!',
+            fullName: 'Mismatched Dept Head',
+            employeeId: 'EMP-MISMATCH-1',
+            role: 'department_head',
+            departmentId: 'dept_eee',
+            departmentName: 'Electrical & Electronic Engineering',
+          },
+          context
+        );
+        expect.fail('Should reject mismatched department for allowlisted Head email');
+      } catch (err) {
+        expect(err.code).to.equal('invalid-argument');
+      }
     });
 
     it('2.7 Allows Admin to activate and deactivate accounts, preventing self-deactivation', async () => {
@@ -521,6 +580,7 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
       mockDb.store.users = {
         user_123: {
           uid: 'user_123',
+          email: 'head.eee.lu@gmail.com',
           role: 'department_head',
           departmentId: 'dept_eee',
           approvalStatus: 'approved',
@@ -535,6 +595,104 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
       expect(result.claims.role).to.equal('department_head');
       expect(result.claims.departmentId).to.equal('dept_eee');
       expect(result.claims.approvalStatus).to.equal('approved');
+    });
+
+    it('2.9 Rejects deactivated admin even if JWT token still carries admin role claim', async () => {
+      mockDb.store.users = {
+        inactive_admin: {
+          uid: 'inactive_admin',
+          role: 'admin',
+          isActive: false,
+        },
+      };
+
+      const context = {
+        auth: {
+          uid: 'inactive_admin',
+          token: { role: 'admin' },
+        },
+      };
+
+      try {
+        await createStaffAccountHandler(
+          {
+            email: 'staff@leavexa.edu',
+            password: 'SafePassword123!',
+            fullName: 'Dr. Staff',
+            employeeId: 'EMP-STF-01',
+            role: 'registrar',
+          },
+          context
+        );
+        expect.fail('Should reject deactivated admin with stale JWT claim');
+      } catch (err) {
+        expect(err.code).to.equal('permission-denied');
+      }
+    });
+
+    it('2.10 Normalizes employeeId & email and rolls back Auth user if Firestore batch commit fails', async () => {
+      mockDb.store.employee_ids = {
+        'HEAD-01': { uid: 'existing_head', employeeId: 'HEAD-01' },
+      };
+      mockAuth.deletedUids = [];
+
+      const context = {
+        auth: {
+          uid: 'admin_uid',
+          token: { role: 'admin' },
+        },
+      };
+
+      // Case-insensitive duplicate Employee ID ('head-01' collides with 'HEAD-01')
+      try {
+        await createStaffAccountHandler(
+          {
+            email: 'head.cse.lu@gmail.com',
+            password: 'SafePassword123!',
+            fullName: 'Prof. New Head',
+            employeeId: '  head-01 ',
+            role: 'department_head',
+            departmentId: 'dept_cse',
+            departmentName: 'Computer Science & Engineering',
+          },
+          context
+        );
+        expect.fail('Should reject case-insensitive duplicate Employee ID');
+      } catch (err) {
+        expect(err.code).to.equal('already-exists');
+      }
+
+      // Rollback Auth user if batch.commit() fails after auth.createUser
+      const origBatch = mockDb.batch.bind(mockDb);
+      mockDb.batch = () => ({
+        set() {},
+        update() {},
+        delete() {},
+        async commit() {
+          throw new Error('Simulated Firestore write failure');
+        },
+      });
+
+      try {
+        await createStaffAccountHandler(
+          {
+            email: 'Registrar.LU@gmail.com',
+            password: 'SafePassword123!',
+            fullName: 'Dr. Rollback',
+            employeeId: 'emp-rb-01',
+            role: 'registrar',
+            phone: '01700000000',
+          },
+          context
+        );
+        expect.fail('Should propagate Firestore failure');
+      } catch (err) {
+        expect(err.message).to.include('Simulated Firestore write failure');
+        expect(mockAuth.deletedUids.length).to.equal(1);
+        expect(Object.keys(mockAuth.users)).to.not.include(mockAuth.deletedUids[0]);
+      } finally {
+        mockDb.batch = origBatch;
+      }
     });
   });
 
@@ -948,6 +1106,188 @@ describe('Phase 12 — Cloud Functions & Trusted Backend Verification', () => {
       const resAvailable = await checkEmployeeIdAvailability('EMP-FREE');
       expect(resAvailable.isAvailable).to.be.true;
       expect(resAvailable.limitationNotice).to.include('not validated against external university HR records');
+    });
+  });
+
+  describe('Task 7: Trusted Leave Submission & Faculty Department Transfer', () => {
+    it('7.1 submitLeaveApplicationHandler derives departmentId strictly from Firestore profile, ignoring client spoof', async () => {
+      mockDb.store.users = {
+        fac_cse_1: {
+          uid: 'fac_cse_1',
+          fullName: 'Dr. CSE Faculty',
+          employeeId: 'CSE-201',
+          role: 'faculty',
+          departmentId: 'dept_cse',
+          departmentName: 'Computer Science & Engineering',
+          approvalStatus: 'approved',
+          isActive: true,
+        },
+      };
+      mockDb.store.departments = {
+        dept_cse: {
+          id: 'dept_cse',
+          name: 'Computer Science & Engineering',
+          isActive: true,
+        },
+      };
+
+      const res = await submitLeaveApplicationHandler(
+        {
+          leaveTypeId: 'casual',
+          leaveTypeName: 'Casual Leave',
+          startDate: '2026-11-20T00:00:00.000Z',
+          endDate: '2026-11-22T00:00:00.000Z',
+          totalDays: 3,
+          reason: 'Family commitment',
+          departmentId: 'dept_eee', // Spoofed client value MUST be ignored
+          status: 'approved', // Spoofed status MUST be ignored
+        },
+        { auth: { uid: 'fac_cse_1' } }
+      );
+
+      expect(res.success).to.be.true;
+      expect(res.departmentId).to.equal('dept_cse');
+      const createdApp = mockDb.store.leave_applications[res.applicationId];
+      expect(createdApp).to.exist;
+      expect(createdApp.applicantUid).to.equal('fac_cse_1');
+      expect(createdApp.departmentId).to.equal('dept_cse');
+      expect(createdApp.status).to.equal('pending');
+      expect(createdApp.headUid).to.be.null;
+    });
+
+    it('7.1b submitLeaveApplicationHandler accepts validated applicationId and blocks overwriting existing app', async () => {
+      mockDb.store.departments = {
+        dept_cse: { id: 'dept_cse', name: 'Computer Science & Engineering', isActive: true },
+      };
+      mockDb.store.users = {
+        fac_cse_1: {
+          uid: 'fac_cse_1',
+          fullName: 'Dr. CSE Researcher',
+          employeeId: 'CSE-101',
+          role: 'faculty',
+          departmentId: 'dept_cse',
+          approvalStatus: 'approved',
+          isActive: true,
+        },
+      };
+      mockDb.store.leave_applications = {
+        existing_app_12345: { id: 'existing_app_12345', applicantUid: 'other_uid' },
+      };
+
+      const validId = 'app_sync_1234567890';
+      const res = await submitLeaveApplicationHandler(
+        {
+          applicationId: validId,
+          leaveTypeId: 'casual',
+          leaveTypeName: 'Casual Leave',
+          startDate: '2026-11-20T00:00:00.000Z',
+          endDate: '2026-11-22T00:00:00.000Z',
+          totalDays: 3,
+          reason: 'Attachment synced test',
+        },
+        { auth: { uid: 'fac_cse_1' } }
+      );
+      expect(res.applicationId).to.equal(validId);
+      expect(mockDb.store.leave_applications[validId]).to.exist;
+
+      try {
+        await submitLeaveApplicationHandler(
+          {
+            applicationId: 'existing_app_12345',
+            leaveTypeId: 'casual',
+            leaveTypeName: 'Casual Leave',
+            startDate: '2026-11-20T00:00:00.000Z',
+            endDate: '2026-11-22T00:00:00.000Z',
+            totalDays: 3,
+            reason: 'Overwrite attempt',
+          },
+          { auth: { uid: 'fac_cse_1' } }
+        );
+        expect.fail('Should reject overwriting existing applicationId');
+      } catch (err) {
+        expect(err.code).to.equal('already-exists');
+      }
+    });
+
+    it('7.2 submitLeaveApplicationHandler blocks pending or inactive faculty', async () => {
+      mockDb.store.users = {
+        fac_pending: {
+          uid: 'fac_pending',
+          role: 'faculty',
+          departmentId: 'dept_cse',
+          approvalStatus: 'pending',
+          isActive: false,
+        },
+      };
+
+      try {
+        await submitLeaveApplicationHandler(
+          {
+            leaveTypeId: 'casual',
+            leaveTypeName: 'Casual Leave',
+            startDate: '2026-11-20T00:00:00.000Z',
+            endDate: '2026-11-21T00:00:00.000Z',
+            totalDays: 2,
+            reason: 'Test',
+          },
+          { auth: { uid: 'fac_pending' } }
+        );
+        expect.fail('Pending faculty must be rejected');
+      } catch (err) {
+        expect(err.code).to.equal('permission-denied');
+      }
+    });
+
+    it('7.3 transferFacultyDepartmentHandler updates user & claims, logs audit event, and leaves historical applications intact', async () => {
+      mockDb.store.users = {
+        admin_1: { uid: 'admin_1', role: 'admin', isActive: true },
+        fac_move: {
+          uid: 'fac_move',
+          role: 'faculty',
+          approvalStatus: 'approved',
+          isActive: true,
+          departmentId: 'dept_cse',
+          departmentName: 'Computer Science & Engineering',
+        },
+      };
+      mockDb.store.departments = {
+        dept_cse: { id: 'dept_cse', name: 'Computer Science & Engineering', isActive: true },
+        dept_eee: { id: 'dept_eee', name: 'Electrical & Electronic Engineering', isActive: true },
+      };
+      mockDb.store.leave_applications = {
+        hist_app_1: {
+          id: 'hist_app_1',
+          applicantUid: 'fac_move',
+          departmentId: 'dept_cse',
+          status: 'approved',
+        },
+      };
+
+      const res = await transferFacultyDepartmentHandler(
+        {
+          targetUid: 'fac_move',
+          newDepartmentId: 'dept_eee',
+          reason: 'Reassignment per Academic Council',
+        },
+        { auth: { uid: 'admin_1', token: { role: 'admin' } } }
+      );
+
+      expect(res.success).to.be.true;
+      expect(res.previousDepartmentId).to.equal('dept_cse');
+      expect(res.newDepartmentId).to.equal('dept_eee');
+      expect(mockDb.store.users.fac_move.departmentId).to.equal('dept_eee');
+      expect(mockDb.store.users.fac_move.departmentName).to.equal('Electrical & Electronic Engineering');
+      expect(mockAuth.customClaims.fac_move.departmentId).to.equal('dept_eee');
+
+      // Historical leave application MUST retain original dept_cse snapshot
+      expect(mockDb.store.leave_applications.hist_app_1.departmentId).to.equal('dept_cse');
+
+      const audit = Object.values(mockDb.store.audit_logs || {}).find(
+        (a) => a.action === 'FACULTY_DEPARTMENT_TRANSFER'
+      );
+      expect(audit).to.exist;
+      expect(audit.details.previousDepartmentId).to.equal('dept_cse');
+      expect(audit.details.newDepartmentId).to.equal('dept_eee');
     });
   });
 });

@@ -533,7 +533,8 @@ class AuthService {
 
     // 4. Validate the existing profile
     try {
-      final verified = _validateProfile(profile);
+      final claims = await _getTokenClaimsSafe();
+      final verified = _validateProfile(profile, tokenClaims: claims);
       _currentUserModel = verified;
       return verified;
     } on AuthException {
@@ -575,25 +576,68 @@ class AuthService {
 
   // ── Session Restore (for Splash) ────────────────────────────────────────
 
-  /// Re-validates the profile of the currently signed-in Firebase user.
+  /// Re-validates the profile and security claims of the currently signed-in
+  /// Firebase user.
   ///
   /// Returns `null` if no user is signed in.
-  /// Throws [AuthException] if the profile is invalid / missing.
+  /// Throws [AuthException] if the session, claims, or profile are invalid.
   Future<UserModel?> restoreSession() async {
     final firebaseUser = _firebaseAuth.currentUser;
     if (firebaseUser == null) return null;
-    return _verifyProfile(firebaseUser.uid);
+
+    try {
+      await firebaseUser.reload();
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'user-disabled') {
+        await signOut();
+        throw const AuthException(
+          code: AuthErrorCode.accountInactive,
+          message: 'Your account has been deactivated.',
+        );
+      }
+      if (e.code == 'user-not-found' ||
+          e.code == 'user-token-expired' ||
+          e.code == 'invalid-user-token') {
+        await signOut();
+        throw const AuthException(
+          code: AuthErrorCode.invalidCredentials,
+          message: 'Invalid email or password.',
+        );
+      }
+    } catch (_) {
+      // Unit mocks or offline transient reload errors still revalidate via profile/claims.
+    }
+
+    return _verifyProfile(firebaseUser.uid, forceRefreshClaims: true);
   }
 
   // ═════════════════════════════════════════════════════════════════════════
   //  Private helpers
   // ═════════════════════════════════════════════════════════════════════════
 
+  Future<Map<String, dynamic>?> _getTokenClaimsSafe({
+    bool forceRefresh = false,
+  }) async {
+    try {
+      final current = _firebaseAuth.currentUser;
+      if (current != null) {
+        final tokenResult = await current.getIdTokenResult(forceRefresh);
+        return tokenResult.claims;
+      }
+    } catch (_) {
+      // Unit mocks without backed FirebaseAuth token claims fall back cleanly.
+    }
+    return null;
+  }
+
   /// Fetches `users/{uid}` and validates the profile.
   ///
   /// On failure it signs the user out so there is no dangling Firebase
   /// session without a valid Firestore profile.
-  Future<UserModel> _verifyProfile(String uid) async {
+  Future<UserModel> _verifyProfile(
+    String uid, {
+    bool forceRefreshClaims = false,
+  }) async {
     final UserModel? profile;
     try {
       profile = await _userRepo.getUserById(uid).timeout(
@@ -632,7 +676,18 @@ class AuthService {
     }
 
     try {
-      final verified = _validateProfile(profile);
+      final claims = await _getTokenClaimsSafe(
+        forceRefresh: forceRefreshClaims,
+      );
+      String? authEmail;
+      try {
+        authEmail = _firebaseAuth.currentUser?.email;
+      } catch (_) {}
+      final verified = _validateProfile(
+        profile,
+        tokenClaims: claims,
+        authEmail: authEmail,
+      );
       _currentUserModel = verified;
       return verified;
     } on AuthException {
@@ -642,25 +697,114 @@ class AuthService {
   }
 
   /// Pure validation — no side-effects.
-  UserModel _validateProfile(UserModel profile) {
+  UserModel _validateProfile(
+    UserModel profile, {
+    Map<String, dynamic>? tokenClaims,
+    String? authEmail,
+  }) {
     // 1. Role must be one of the four known identifiers
     if (!AppStrings.allRoles.contains(profile.role)) {
-      throw AuthException(
+      throw const AuthException(
         code: AuthErrorCode.invalidRole,
-        message:
-            'Your account has an invalid role "${profile.role}". '
-            'Please contact the administrator.',
+        message: 'Your account role or department configuration is invalid.',
       );
     }
 
-    // 2. Faculty-specific checks
-    if (profile.isFaculty) {
+    final profileEmail = profile.email.trim().toLowerCase();
+    final normalizedAuthEmail = authEmail?.trim().toLowerCase();
+    if (normalizedAuthEmail != null &&
+        normalizedAuthEmail.isNotEmpty &&
+        normalizedAuthEmail != profileEmail) {
+      throw const AuthException(
+        code: AuthErrorCode.unauthorizedInstitutionalAccount,
+        message: 'This institutional account is not authorized.',
+      );
+    }
+
+    // 1b. Token claim vs Firestore profile consistency check
+    if (tokenClaims != null) {
+      final claimRole = tokenClaims['role']?.toString().trim();
+      if (claimRole != null && claimRole.isNotEmpty && claimRole != profile.role) {
+        throw const AuthException(
+          code: AuthErrorCode.invalidRole,
+          message: 'Your account role or department configuration is invalid.',
+        );
+      }
+
+      if (profile.isDeptHead) {
+        final claimDept = tokenClaims['departmentId']?.toString().trim();
+        final profileDept = profile.departmentId.trim();
+        if (claimRole == AppStrings.roleDeptHead &&
+            (claimDept == null || claimDept.isEmpty)) {
+          throw const AuthException(
+            code: AuthErrorCode.invalidDepartment,
+            message: 'Your account role or department configuration is invalid.',
+          );
+        }
+        if (claimDept != null &&
+            claimDept.isNotEmpty &&
+            claimDept != profileDept) {
+          throw const AuthException(
+            code: AuthErrorCode.invalidDepartment,
+            message: 'Your account role or department configuration is invalid.',
+          );
+        }
+      }
+    }
+
+    // 2. Strict institutional allowlist enforcement for Admin, Registrar, and Department Head
+    if (!profile.isFaculty) {
+      final spec = AppConstants.getInstitutionalSpec(profileEmail);
+      if (spec == null) {
+        throw const AuthException(
+          code: AuthErrorCode.unauthorizedInstitutionalAccount,
+          message: 'This institutional account is not authorized.',
+        );
+      }
+      if (spec.role != profile.role) {
+        throw const AuthException(
+          code: AuthErrorCode.invalidRole,
+          message: 'Your account role or department configuration is invalid.',
+        );
+      }
+      if (profile.isDeptHead &&
+          (profile.departmentId.trim().isEmpty ||
+              profile.departmentId.trim() != spec.departmentId)) {
+        throw const AuthException(
+          code: AuthErrorCode.invalidDepartment,
+          message: 'Your account role or department configuration is invalid.',
+        );
+      }
       if (profile.isPending) {
         throw const AuthException(
           code: AuthErrorCode.pendingApproval,
-          message:
-              'Your account is pending admin approval. '
-              'Please wait for approval.',
+          message: 'Your account is pending approval.',
+        );
+      }
+      if (!profile.isActive) {
+        throw const AuthException(
+          code: AuthErrorCode.accountInactive,
+          message: 'Your account has been deactivated.',
+        );
+      }
+      if (!profile.isApproved) {
+        throw const AuthException(
+          code: AuthErrorCode.unauthorizedInstitutionalAccount,
+          message: 'This institutional account is not authorized.',
+        );
+      }
+    } else {
+      // 3. Faculty-specific checks (institutional emails cannot be used as faculty)
+      if (AppConstants.isInstitutionalAllowlistedEmail(profileEmail)) {
+        throw const AuthException(
+          code: AuthErrorCode.invalidRole,
+          message: 'Your account role or department configuration is invalid.',
+        );
+      }
+      if (profile.isPending) {
+        throw const AuthException(
+          code: AuthErrorCode.pendingApproval,
+          message: 'Your account is pending approval.',
         );
       }
       if (profile.isRejected) {
@@ -674,26 +818,14 @@ class AuthService {
       if (!profile.isActive) {
         throw const AuthException(
           code: AuthErrorCode.accountInactive,
-          message:
-              'Your account is currently inactive. '
-              'Please contact the administrator.',
+          message: 'Your account has been deactivated.',
         );
       }
       // Faculty must be both active AND approved
       if (!profile.isActiveAndApproved) {
         throw const AuthException(
           code: AuthErrorCode.accountInactive,
-          message: 'Your account is not authorised to access the system.',
-        );
-      }
-    } else {
-      // 3. Admin / Dept Head / Registrar — must be active
-      if (!profile.isActive) {
-        throw const AuthException(
-          code: AuthErrorCode.accountInactive,
-          message:
-              'Your account is currently inactive. '
-              'Please contact the administrator.',
+          message: 'Your account has been deactivated.',
         );
       }
     }
@@ -735,12 +867,12 @@ class AuthService {
       case 'invalid-email':
         return const AuthException(
           code: AuthErrorCode.invalidCredentials,
-          message: 'Please enter a valid email address.',
+          message: 'Invalid email or password.',
         );
       case 'user-disabled':
         return const AuthException(
           code: AuthErrorCode.accountInactive,
-          message: 'This account has been disabled.',
+          message: 'Your account has been deactivated.',
         );
       case 'account-exists-with-different-credential':
       case 'credential-already-in-use':

@@ -220,6 +220,7 @@ class FcmService {
     switch (type) {
       case 'leave_applied':
       case 'leave_submitted':
+      case 'leave_cancelled':
         if (applicationId != null && applicationId.toString().isNotEmpty) {
           nav.pushNamed(
             AppRoutes.leaveRequestDetails,
@@ -257,10 +258,12 @@ class FcmService {
         nav.pushNamed(AppRoutes.adminDashboard, arguments: {'tab': 1});
         break;
 
+      case 'approval':
       case 'faculty_approved':
         nav.pushNamed(AppRoutes.facultyDashboard);
         break;
 
+      case 'rejection':
       case 'faculty_rejected':
         nav.pushNamed(AppRoutes.login);
         break;

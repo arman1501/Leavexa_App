@@ -2,6 +2,7 @@
 //  leaves.js  –  Idempotent Atomic Leave Balance Deduction & Lifecycle Audit
 // ─────────────────────────────────────────────────────────────────────────────
 
+const { HttpsError } = require('firebase-functions/v2/https');
 const { admin, db, FieldValue } = require('./admin');
 const { logAuditEvent } = require('./audit');
 const {
@@ -9,6 +10,131 @@ const {
   sendPushNotificationToDepartmentHead,
   sendPushNotificationToRegistrars,
 } = require('./notifications');
+
+/**
+ * Trusted server-side leave submission callable.
+ * Verifies faculty existence, active/approved status, department validity,
+ * derives applicant & department snapshot strictly from Firestore profile,
+ * and rejects spoofed client departmentId or headUid fields.
+ */
+async function submitLeaveApplicationHandler(data, context) {
+  if (!context || !context.auth || !context.auth.uid) {
+    throw new HttpsError('unauthenticated', 'Authentication required to submit a leave application.');
+  }
+
+  const uid = context.auth.uid;
+  const payload = data || {};
+  const leaveTypeId = typeof payload.leaveTypeId === 'string' ? payload.leaveTypeId.trim().toLowerCase() : '';
+  const leaveTypeName = typeof payload.leaveTypeName === 'string' ? payload.leaveTypeName.trim() : '';
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  const totalDays = Number(payload.totalDays);
+
+  if (!leaveTypeId || !leaveTypeName || !reason) {
+    throw new HttpsError('invalid-argument', 'leaveTypeId, leaveTypeName, and reason are required.');
+  }
+  if (!Number.isFinite(totalDays) || totalDays <= 0 || totalDays > 365) {
+    throw new HttpsError('invalid-argument', 'totalDays must be between 1 and 365.');
+  }
+
+  const startDate = payload.startDate ? new Date(payload.startDate) : null;
+  const endDate = payload.endDate ? new Date(payload.endDate) : null;
+  if (!startDate || isNaN(startDate.getTime()) || !endDate || isNaN(endDate.getTime()) || endDate < startDate) {
+    throw new HttpsError('invalid-argument', 'Valid startDate and endDate (endDate >= startDate) are required.');
+  }
+
+  const userSnap = await db.collection('users').doc(uid).get();
+  if (!userSnap.exists) {
+    throw new HttpsError('not-found', 'Faculty user profile not found.');
+  }
+
+  const user = userSnap.data() || {};
+  if (user.role !== 'faculty') {
+    throw new HttpsError('permission-denied', 'Only faculty accounts can submit leave applications.');
+  }
+  if (user.approvalStatus !== 'approved' || user.isActive !== true) {
+    throw new HttpsError('permission-denied', 'Your faculty account must be approved and active before applying for leave.');
+  }
+
+  const departmentId = typeof user.departmentId === 'string' ? user.departmentId.trim() : '';
+  if (!departmentId) {
+    throw new HttpsError('failed-precondition', 'Faculty profile is missing a valid department assignment.');
+  }
+
+  const deptSnap = await db.collection('departments').doc(departmentId).get();
+  if (!deptSnap.exists || deptSnap.data().isActive === false) {
+    throw new HttpsError('failed-precondition', `Assigned department '${departmentId}' does not exist or is inactive.`);
+  }
+  const deptData = deptSnap.data() || {};
+
+  const rawAppId = typeof payload.applicationId === 'string' ? payload.applicationId.trim() : '';
+  if (rawAppId && !/^[A-Za-z0-9_-]{12,64}$/.test(rawAppId)) {
+    throw new HttpsError('invalid-argument', 'Invalid applicationId format.');
+  }
+
+  const appRef = rawAppId
+    ? db.collection('leave_applications').doc(rawAppId)
+    : db.collection('leave_applications').doc();
+  const nowIso = new Date().toISOString();
+  const applicationDoc = {
+    id: appRef.id,
+    applicantUid: uid,
+    applicantName: user.fullName || 'Faculty Member',
+    applicantEmployeeId: user.employeeId || '',
+    departmentId,
+    departmentName: deptData.name || user.departmentName || departmentId,
+    leaveTypeId,
+    leaveTypeName,
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+    totalDays,
+    reason,
+    documentUrl: typeof payload.documentUrl === 'string' && payload.documentUrl.trim() ? payload.documentUrl.trim() : null,
+    status: 'pending',
+    headUid: null,
+    headComment: null,
+    headActionAt: null,
+    registrarUid: null,
+    registrarComment: null,
+    registrarActionAt: null,
+    balanceDeducted: false,
+    appliedAt: nowIso,
+    createdAt: FieldValue.serverTimestamp(),
+  };
+
+  if (rawAppId) {
+    const existingSnap = await appRef.get();
+    if (existingSnap.exists) {
+      throw new HttpsError('already-exists', 'Application ID already exists.');
+    }
+  }
+  if (typeof appRef.create === 'function') {
+    await appRef.create(applicationDoc);
+  } else {
+    await appRef.set(applicationDoc);
+  }
+
+  await logAuditEvent({
+    actorUid: uid,
+    actorRole: 'faculty',
+    action: 'LEAVE_SUBMITTED',
+    targetType: 'leave_application',
+    targetId: appRef.id,
+    relatedApplicationId: appRef.id,
+    details: {
+      departmentId,
+      departmentName: applicationDoc.departmentName,
+      leaveTypeId,
+      totalDays,
+    },
+  });
+
+  return {
+    success: true,
+    applicationId: appRef.id,
+    departmentId,
+    departmentName: applicationDoc.departmentName,
+  };
+}
 
 /**
  * Core atomic leave balance deduction logic.
@@ -483,6 +609,7 @@ async function onLeaveApplicationCreateHandler(snap, context) {
 }
 
 module.exports = {
+  submitLeaveApplicationHandler,
   processLeaveDeductionTransaction,
   onLeaveApplicationUpdateHandler,
   onLeaveApplicationCreateHandler,

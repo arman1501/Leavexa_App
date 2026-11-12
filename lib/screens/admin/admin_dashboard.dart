@@ -4,10 +4,13 @@
 //  Manage pending teacher registrations, credential verification & approvals
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/utils/date_utils.dart';
 import '../../core/utils/helpers.dart';
 import '../../models/user_model.dart';
 import '../../repositories/auth_repository.dart';
@@ -47,10 +50,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   bool _sortNewestFirst = true;
   bool _didReadInitialTab = false;
+  bool _isLoading = true;
+  bool _hasStreamData = false;
+  String? _loadError;
   String _adminName = 'System Administrator';
   String? _adminPhotoUrl;
   List<Map<String, dynamic>> _realTeachers = [];
   List<Map<String, dynamic>> _allFacultyDirectory = [];
+  List<OfficialFacultyMember> _officialMembers = const [];
+  List<UserModel> _latestPending = const [];
+  List<UserModel> _latestAllFaculty = const [];
+  StreamSubscription<List<UserModel>>? _usersSub;
 
   // Approvals Tab state
   String _approvalStatusFilter =
@@ -60,6 +70,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   // Faculty Directory Tab state
   String _facultyDeptFilter = 'ALL';
+  String _facultyStatusFilter =
+      'ALL'; // 'ALL', 'ACTIVE', 'INACTIVE', 'REGISTERED', 'OFFICIAL'
   String _facultySearchQuery = '';
   final TextEditingController _facultySearchCtrl = TextEditingController();
 
@@ -67,6 +79,58 @@ class _AdminDashboardState extends State<AdminDashboard> {
   void initState() {
     super.initState();
     _loadRealFaculty();
+    _startRealtimeStreams();
+  }
+
+  void _startRealtimeStreams() {
+    if (_usersSub != null) return;
+    try {
+      _usersSub = _userRepo.streamAllUsers().listen(
+        (allUsers) {
+          if (!mounted) return;
+          _hasStreamData = true;
+          _loadError = null;
+          final currentUid =
+              _authRepo.currentUserId ?? AuthRepository.activeUser?.uid;
+          if (currentUid != null) {
+            for (final u in allUsers) {
+              if (u.uid == currentUid) {
+                if (_adminName != u.fullName || _adminPhotoUrl != u.photoUrl) {
+                  setState(() {
+                    _adminName = u.fullName;
+                    _adminPhotoUrl = u.photoUrl;
+                  });
+                }
+                break;
+              }
+            }
+          }
+
+          final faculty = allUsers
+              .where((u) => u.role == 'faculty' && UserRepository.isGenuineUser(u))
+              .toList()
+            ..sort((a, b) => a.fullName.compareTo(b.fullName));
+          final pending = faculty.where((u) => u.isPending).toList()
+            ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+          _latestPending = pending;
+          _latestAllFaculty = faculty;
+          _applyFacultyData(pending, faculty);
+        },
+        onError: (Object error) {
+          if (!mounted) return;
+          setState(() {
+            _isLoading = false;
+            if (!_hasStreamData && _realTeachers.isEmpty) {
+              _loadError = 'Unable to sync live faculty records. Tap retry to reconnect.';
+            }
+          });
+        },
+      );
+    } catch (_) {
+      // Gracefully fall back to future-based _loadRealFaculty() in unit tests
+      // where Firebase is not initialized and streamAllUsers() is not mocked.
+    }
   }
 
   Future<void> _loadRealFaculty() async {
@@ -83,127 +147,146 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
       final pending = await _userRepo.getPendingFaculty();
       final all = await _userRepo.getAllFaculty();
-      List<OfficialFacultyMember> officialMembers = const [];
-      try {
-        officialMembers =
-            await UniversityInfoService().getOfficialFaculty();
-      } catch (_) {}
 
-      bool isGenuineUser(UserModel u) {
-        if (u.fullName.trim().isEmpty || u.employeeId.trim().isEmpty) {
-          return false;
-        }
-        final name = u.fullName.toLowerCase();
-        final emp = u.employeeId.toLowerCase();
-        final uid = u.uid.toLowerCase();
-        if (emp.contains('nophoto') ||
-            name.contains('valid faculty') ||
-            name.contains('test teacher') ||
-            name.contains('mocha') ||
-            uid.startsWith('no_photo_user') ||
-            uid.startsWith('owner_') ||
-            uid.startsWith('user_a_') ||
-            uid.startsWith('restart_uid_') ||
-            uid.startsWith('valid_reg_')) {
-          return false;
-        }
-        return true;
+      final genuinePending = pending.where(UserRepository.isGenuineUser).toList();
+      final genuineAll = all.where(UserRepository.isGenuineUser).toList();
+
+      if (!_hasStreamData) {
+        _latestPending = genuinePending;
+        _latestAllFaculty = genuineAll;
+        _applyFacultyData(genuinePending, genuineAll);
       }
 
-      final genuinePending = pending.where(isGenuineUser).toList();
-      final genuineAll = all.where(isGenuineUser).toList();
-
-      if (mounted) {
+      try {
+        final officialMembers =
+            await UniversityInfoService().getOfficialFaculty();
+        if (mounted) {
+          _officialMembers = officialMembers;
+          _applyFacultyData(_latestPending, _latestAllFaculty);
+        }
+      } catch (_) {}
+    } catch (e) {
+      if (mounted && !_hasStreamData) {
         setState(() {
-          _pendingCount = genuinePending.length;
-          _approvedCount = genuineAll.where((u) => u.isApproved).length;
-          _rejectedCount = genuineAll.where((u) => u.isRejected).length;
-
-          // 1. Registered faculty (Leavexa verified)
-          final registeredVerified =
-              genuineAll.where((u) => u.isApproved).map((u) {
-            return {
-              'id': u.uid,
-              'name': u.fullName,
-              'empId': u.employeeId,
-              'department': u.departmentName,
-              'deptCode': u.departmentId.replaceAll('dept_', '').toUpperCase(),
-              'designation': u.designation,
-              'email': u.email,
-              'phone': u.phone ?? 'N/A',
-              'joined': 'Leavexa Registered Member',
-              'degrees': [u.designation],
-              'institution': 'Leading University Academic Faculty',
-              'credentials': 'Faculty ID Verified',
-              'nidVerified': true,
-              'status': 'VERIFIED',
-              'isActive': u.isActive,
-              'isOfficial': false,
-              'source': 'Leavexa Registered & Verified',
-              'model': u,
-            };
-          }).toList();
-
-          // 2. Official university faculty directory from lus.ac.bd
-          final officialItems = officialMembers.map((f) {
-            return {
-              'id': f.id,
-              'name': f.name,
-              'empId': f.id,
-              'department': f.department,
-              'deptCode': f.deptCode,
-              'designation': f.designation,
-              'email': '',
-              'phone': '',
-              'joined': 'Official University Directory',
-              'degrees': [f.designation],
-              'institution': 'Leading University (${f.department})',
-              'credentials': 'Faculty ID Verified',
-              'nidVerified': true,
-              'status': 'VERIFIED',
-              'isActive': true,
-              'isOfficial': true,
-              'imageUrl': f.imageUrl,
-              'profileUrl': f.profileUrl,
-              'source': 'Official University Directory • lus.ac.bd',
-            };
-          }).toList();
-
-          _allFacultyDirectory = [
-            ...registeredVerified,
-            ...officialItems,
-          ];
-
-          // 3. Pending approvals list (genuine registered accounts awaiting approval)
-          final combined = [
-            ...genuinePending,
-            ...genuineAll.where((u) => !u.isPending),
-          ];
-          _realTeachers = combined.map((u) {
-            final isApproved = u.isApproved;
-            return {
-              'id': u.uid,
-              'name': u.fullName,
-              'empId': u.employeeId,
-              'department': u.departmentName,
-              'designation': u.designation,
-              'submittedTime': 'Registered Member',
-              'submittedHours': 1,
-              'credentials': isApproved
-                  ? 'Faculty ID Verified'
-                  : 'Faculty ID: Awaiting Verification',
-              'avatarType': 'placeholder',
-              'avatarColor': const Color(0xFF0D9488),
-              'status': u.approvalStatus.toUpperCase(),
-              'institution': 'Leading University Faculty Member',
-              'nidVerified': isApproved,
-              'degrees': [u.designation, u.departmentName],
-              'model': u,
-            };
-          }).toList();
+          _isLoading = false;
+          _loadError = 'Failed to load dashboard data. Please check connection.';
         });
       }
-    } catch (_) {}
+    }
+  }
+
+  void _applyFacultyData(List<UserModel> pending, List<UserModel> all) {
+    final genuinePending = pending.where(UserRepository.isGenuineUser).toList();
+    final genuineAll = all.where(UserRepository.isGenuineUser).toList();
+
+    if (!mounted) return;
+    setState(() {
+      _isLoading = false;
+      _loadError = null;
+      _pendingCount = genuinePending.length;
+      _approvedCount = genuineAll.where((u) => u.isApproved).length;
+      _rejectedCount = genuineAll.where((u) => u.isRejected).length;
+
+      // 1. Registered faculty (Leavexa verified)
+      final registeredVerified =
+          genuineAll.where((u) => u.isApproved).map((u) {
+        return {
+          'id': u.uid,
+          'name': u.fullName,
+          'empId': u.employeeId,
+          'department': u.departmentName,
+          'deptCode': AppConstants.getDepartmentCode(
+            u.departmentId,
+            u.departmentName,
+          ),
+          'designation': u.designation,
+          'email': u.email,
+          'phone': u.phone ?? 'N/A',
+          'joined': 'Leavexa Registered Member',
+          'degrees': [u.designation],
+          'institution': 'Leading University Academic Faculty',
+          'credentials': 'Faculty ID Verified',
+          'nidVerified': true,
+          'status': 'VERIFIED',
+          'isActive': u.isActive,
+          'isOfficial': false,
+          'source': 'Leavexa Registered & Verified',
+          'model': u,
+        };
+      }).toList();
+
+      // 2. Official university faculty directory from lus.ac.bd
+      final officialItems = _officialMembers.map((f) {
+        return {
+          'id': f.id,
+          'name': f.name,
+          'empId': f.id,
+          'department': f.department,
+          'deptCode': f.deptCode,
+          'designation': f.designation,
+          'email': '',
+          'phone': '',
+          'joined': 'Official University Directory',
+          'degrees': [f.designation],
+          'institution': 'Leading University (${f.department})',
+          'credentials': 'Faculty ID Verified',
+          'nidVerified': true,
+          'status': 'VERIFIED',
+          'isActive': true,
+          'isOfficial': true,
+          'imageUrl': f.imageUrl,
+          'profileUrl': f.profileUrl,
+          'source': 'Official University Directory • lus.ac.bd',
+        };
+      }).toList();
+
+      _allFacultyDirectory = [
+        ...registeredVerified,
+        ...officialItems,
+      ];
+
+      // 3. Pending approvals list + reviewed faculty accounts (no duplicates)
+      final seenUids = <String>{};
+      final combined = <UserModel>[];
+      for (final u in genuinePending) {
+        if (seenUids.add(u.uid)) combined.add(u);
+      }
+      for (final u in genuineAll) {
+        if (!u.isPending && seenUids.add(u.uid)) combined.add(u);
+      }
+      _realTeachers = combined.map((u) {
+        final isApproved = u.isApproved;
+        final isRejected = u.isRejected;
+        final createdAtMs = u.createdAt.millisecondsSinceEpoch;
+        final submittedLabel = createdAtMs > 0
+            ? LeaveDateUtils.timeAgo(u.createdAt)
+            : 'Registered Member';
+        return {
+          'id': u.uid,
+          'name': u.fullName,
+          'empId': u.employeeId,
+          'department': u.departmentName,
+          'designation': u.designation,
+          'email': u.email,
+          'phone': u.phone ?? '',
+          'submittedTime': submittedLabel,
+          'createdAtMs': createdAtMs,
+          'submittedHours': 1,
+          'credentials': isApproved
+              ? 'Faculty ID Verified'
+              : isRejected
+                  ? 'Registration Rejected'
+                  : 'Faculty ID: Awaiting Verification',
+          'avatarType': 'placeholder',
+          'avatarColor': const Color(0xFF0D9488),
+          'status': u.approvalStatus.toUpperCase(),
+          'institution': 'Leading University Faculty Member',
+          'nidVerified': isApproved,
+          'degrees': [u.designation, u.departmentName],
+          'model': u,
+        };
+      }).toList();
+    });
   }
 
   List<Map<String, dynamic>> get _currentTeachers => _realTeachers;
@@ -230,6 +313,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   @override
   void dispose() {
+    _usersSub?.cancel();
     _approvalSearchCtrl.dispose();
     _facultySearchCtrl.dispose();
     super.dispose();
@@ -245,6 +329,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
   Future<void> _onApproveTeacher(Map<String, dynamic> teacher) async {
     final userModel = teacher['model'] as UserModel?;
+    final prevStatus = teacher['status'];
+    final prevPending = _pendingCount;
+    final prevApproved = _approvedCount;
+
     setState(() {
       teacher['status'] = 'APPROVED';
       _pendingCount = (_pendingCount > 0) ? _pendingCount - 1 : 0;
@@ -254,9 +342,20 @@ class _AdminDashboardState extends State<AdminDashboard> {
     if (userModel != null) {
       try {
         await _userRepo.approveFaculty(userModel.uid);
-      } catch (e, stack) {
-      debugPrint('LOAD REAL FACULTY ERROR: $e\n$stack');
-    }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            teacher['status'] = prevStatus;
+            _pendingCount = prevPending;
+            _approvedCount = prevApproved;
+          });
+          AppHelpers.showError(
+            context,
+            'Failed to approve ${teacher['name']}: $e',
+          );
+        }
+        return;
+      }
     }
 
     if (mounted) {
@@ -415,6 +514,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           onPressed: () async {
                             Navigator.pop(ctx);
                             final userModel = teacher['model'] as UserModel?;
+                            final prevStatus = teacher['status'];
+                            final prevPending = _pendingCount;
+                            final prevRejected = _rejectedCount;
                             setState(() {
                               teacher['status'] = 'REJECTED';
                               _pendingCount = (_pendingCount > 0)
@@ -428,13 +530,24 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                   userModel.uid,
                                   reason: selectedReason,
                                 );
-                              } catch (e, stack) {
-      debugPrint('LOAD REAL FACULTY ERROR: $e\n$stack');
-    }
+                              } catch (e) {
+                                if (mounted) {
+                                  setState(() {
+                                    teacher['status'] = prevStatus;
+                                    _pendingCount = prevPending;
+                                    _rejectedCount = prevRejected;
+                                  });
+                                  AppHelpers.showError(
+                                    this.context,
+                                    'Failed to reject ${teacher['name']}: $e',
+                                  );
+                                }
+                                return;
+                              }
                             }
-                            if (context.mounted) {
+                            if (mounted) {
                               AppHelpers.showError(
-                                context,
+                                this.context,
                                 'Registration rejected: $selectedReason',
                               );
                             }
@@ -516,9 +629,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
       'dept_law': 'Department of Law',
       'dept_arch': 'Department of Architecture',
       'dept_public_health': 'Department of Public Health',
-      'dept_thm': 'Toursim & Hospitality Management',
+      'dept_thm': 'Tourism & Hospitality Management',
       'dept_islamic_studies': 'Department of Islamic Studies',
       'dept_english': 'Department of English',
+      'dept_bangla': 'Department of Bangla',
     };
 
     showModalBottomSheet(
@@ -882,10 +996,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
                                   try {
                                     await _userRepo.createStaffAccount(
-                                      email: emailCtrl.text.trim(),
+                                      email: emailCtrl.text.trim().toLowerCase(),
                                       password: passwordCtrl.text,
                                       fullName: nameCtrl.text.trim(),
-                                      employeeId: empIdCtrl.text.trim(),
+                                      employeeId:
+                                          empIdCtrl.text.trim().toUpperCase(),
                                       role: selectedRole,
                                       departmentId:
                                           selectedRole == 'department_head'
@@ -903,13 +1018,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                     );
 
                                     if (!mounted) return;
+                                    final createdName = nameCtrl.text.trim();
                                     if (ctx.mounted) {
                                       Navigator.pop(ctx);
                                     }
-                                    _loadRealFaculty();
+                                    if (!_hasStreamData) {
+                                      _loadRealFaculty();
+                                    }
                                     AppHelpers.showSuccess(
-                                      context,
-                                      'Staff account for ${nameCtrl.text.trim()} created successfully!',
+                                      this.context,
+                                      'Staff account for $createdName created successfully!',
                                     );
                                   } catch (e) {
                                     setModalState(() {
@@ -958,10 +1076,32 @@ class _AdminDashboardState extends State<AdminDashboard> {
     );
   }
 
+  static const MethodChannel _browserChannel = MethodChannel(
+    'com.leavexa.leavexa/browser',
+  );
+
+  Future<void> _launchUniversityWebsite(String url) async {
+    try {
+      final launched = await _browserChannel.invokeMethod<bool>(
+        'openUrl',
+        {'url': url},
+      );
+      if (launched == true) return;
+    } catch (_) {
+      // Fallback for non-Android platforms or widget tests
+    }
+    await Clipboard.setData(ClipboardData(text: url));
+    if (mounted) {
+      AppHelpers.showSuccess(
+        context,
+        'University website link copied: $url',
+      );
+    }
+  }
+
   void _openUniversityInfoModal() {
     final infoService = UniversityInfoService();
-    bool isSyncing = false;
-    String? syncMessage;
+    const universityUrl = 'https://lus.ac.bd/';
 
     showModalBottomSheet(
       context: context,
@@ -979,6 +1119,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
             final borderCol =
                 isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+            final accentColor =
+                isDark ? const Color(0xFF34D399) : const Color(0xFF1B4332);
+            final linkColor =
+                isDark ? const Color(0xFF6EE7B7) : const Color(0xFF1B4332);
 
             return Container(
               height: MediaQuery.of(context).size.height * 0.85,
@@ -1004,42 +1148,48 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1B4332).withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(10),
-                            ),
-                            child: const Icon(
-                              Icons.public_rounded,
-                              color: Color(0xFF1B4332),
-                              size: 22,
-                            ),
-                          ),
-                          const SizedBox(width: 10),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'University Official Info',
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.w700,
-                                  color: textPrimary,
-                                ),
+                      Expanded(
+                        child: Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: accentColor.withValues(alpha: 0.14),
+                                borderRadius: BorderRadius.circular(10),
                               ),
-                              Text(
-                                'Primary Source: https://lus.ac.bd/',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: textSecondary,
-                                ),
+                              child: Icon(
+                                Icons.public_rounded,
+                                color: accentColor,
+                                size: 22,
                               ),
-                            ],
-                          ),
-                        ],
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'University Official Info',
+                                    style: TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w700,
+                                      color: textPrimary,
+                                    ),
+                                  ),
+                                  Text(
+                                    'Primary Source: $universityUrl',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: textSecondary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                       IconButton(
                         icon: Icon(Icons.close_rounded, color: textSecondary),
@@ -1048,28 +1198,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  if (syncMessage != null)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF22C55E).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFF22C55E)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.check_circle_outline, color: Color(0xFF22C55E), size: 18),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              syncMessage!,
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF15803D)),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
                   Expanded(
                     child: FutureBuilder<List<dynamic>>(
                       future: Future.wait([
@@ -1087,6 +1215,9 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         final departments = snapshot.data![1] as List<OfficialDepartment>;
                         final policiesDoc = snapshot.data![2] as Map<String, dynamic>;
                         final metadata = snapshot.data![3] as Map<String, dynamic>?;
+                        final resolvedUrl = overview.websiteUrl.isNotEmpty
+                            ? overview.websiteUrl
+                            : universityUrl;
 
                         final leavePolicies = (policiesDoc['leavePolicies'] as Map<String, dynamic>?) ?? {};
 
@@ -1117,31 +1248,86 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                     style: TextStyle(fontSize: 12, color: textSecondary),
                                   ),
                                   const SizedBox(height: 8),
-                                  Row(
+                                  Wrap(
+                                    spacing: 14,
+                                    runSpacing: 6,
+                                    crossAxisAlignment: WrapCrossAlignment.center,
                                     children: [
-                                      Icon(Icons.phone_outlined, size: 14, color: textSecondary),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        'PABX: ${overview.pabx}',
-                                        style: TextStyle(fontSize: 12, color: textPrimary),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.phone_outlined, size: 14, color: textSecondary),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            'PABX: ${overview.pabx}',
+                                            style: TextStyle(fontSize: 12, color: textPrimary),
+                                          ),
+                                        ],
                                       ),
-                                      const SizedBox(width: 14),
-                                      Icon(Icons.email_outlined, size: 14, color: textSecondary),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        overview.generalEmail,
-                                        style: TextStyle(fontSize: 12, color: textPrimary),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(Icons.email_outlined, size: 14, color: textSecondary),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            overview.generalEmail,
+                                            style: TextStyle(fontSize: 12, color: textPrimary),
+                                          ),
+                                        ],
                                       ),
                                     ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  InkWell(
+                                    onTap: () => _launchUniversityWebsite(resolvedUrl),
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 7,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: accentColor.withValues(alpha: 0.12),
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: accentColor.withValues(alpha: 0.4),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            Icons.link_rounded,
+                                            size: 15,
+                                            color: linkColor,
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Flexible(
+                                            child: Text(
+                                              resolvedUrl,
+                                              style: TextStyle(
+                                                fontSize: 12.5,
+                                                fontWeight: FontWeight.w700,
+                                                color: linkColor,
+                                                decoration: TextDecoration.underline,
+                                                decorationColor: linkColor,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   ),
                                   if (metadata != null) ...[
                                     const SizedBox(height: 8),
                                     Text(
                                       'Last sync: ${metadata['status'] ?? 'SUCCESS'} (${metadata['lastSuccessfulSync'] != null ? 'Synced' : 'Cached'})',
-                                      style: const TextStyle(
+                                      style: TextStyle(
                                         fontSize: 11,
                                         fontWeight: FontWeight.w600,
-                                        color: Color(0xFF15803D),
+                                        color: isDark
+                                            ? const Color(0xFF4ADE80)
+                                            : const Color(0xFF15803D),
                                       ),
                                     ),
                                   ],
@@ -1167,7 +1353,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 return Chip(
                                   label: Text(
                                     '${d.name} (${d.code})',
-                                    style: const TextStyle(fontSize: 11),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: textPrimary,
+                                    ),
                                   ),
                                   backgroundColor: boxBg,
                                   side: BorderSide(color: borderCol),
@@ -1230,8 +1419,12 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                             style: TextStyle(
                                               fontSize: 11,
                                               color: isVerified
-                                                  ? const Color(0xFF15803D)
-                                                  : const Color(0xFFB45309),
+                                                  ? (isDark
+                                                      ? const Color(0xFF4ADE80)
+                                                      : const Color(0xFF15803D))
+                                                  : (isDark
+                                                      ? const Color(0xFFFBBF24)
+                                                      : const Color(0xFFB45309)),
                                             ),
                                           ),
                                         ],
@@ -1250,38 +1443,17 @@ class _AdminDashboardState extends State<AdminDashboard> {
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
-                      key: const Key('modal_sync_university_button'),
-                      onPressed: isSyncing
-                          ? null
-                          : () async {
-                              setModalState(() => isSyncing = true);
-                              try {
-                                final res = await infoService.triggerSync(force: true);
-                                setModalState(() {
-                                  isSyncing = false;
-                                  syncMessage =
-                                      'Synchronized successfully from lus.ac.bd (${res['totalDepartments'] ?? 11} departments, Study Leave policy verified).';
-                                });
-                              } catch (err) {
-                                setModalState(() {
-                                  isSyncing = false;
-                                  syncMessage = 'Sync completed with cached fallback: $err';
-                                });
-                              }
-                            },
-                      icon: isSyncing
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                            )
-                          : const Icon(Icons.sync_rounded, size: 18),
-                      label: Text(
-                        isSyncing ? 'Synchronizing with lus.ac.bd...' : 'Synchronize Information from Website',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      key: const Key('modal_visit_university_website_button'),
+                      onPressed: () => _launchUniversityWebsite(universityUrl),
+                      icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                      label: const Text(
+                        'Visit University Website',
+                        style: TextStyle(fontWeight: FontWeight.w700),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1B4332),
+                        backgroundColor: isDark
+                            ? const Color(0xFF0D9488)
+                            : const Color(0xFF1B4332),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                         shape: RoundedRectangleBorder(
@@ -1455,6 +1627,37 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ),
                       ],
                     ),
+                    if ((teacher['email'] as String? ?? '').isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.email_outlined, size: 15, color: textSecondary),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              teacher['email'] as String,
+                              style: TextStyle(fontSize: 12.5, color: textSecondary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if ((teacher['phone'] as String? ?? '').isNotEmpty &&
+                        teacher['phone'] != 'N/A') ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Icon(Icons.phone_outlined, size: 15, color: textSecondary),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              teacher['phone'] as String,
+                              style: TextStyle(fontSize: 12.5, color: textSecondary),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -1520,7 +1723,27 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ),
                   ],
                 )
-              else
+              else ...[
+                if (teacher['isOfficial'] != true &&
+                    teacher['status'] == 'APPROVED' &&
+                    (teacher['id'] as String? ?? '').isNotEmpty) ...[
+                  SizedBox(
+                    width: double.infinity,
+                    height: 44,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _openTransferDepartmentModal(teacher);
+                      },
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: const Text(
+                        'Transfer Department',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 SizedBox(
                   width: double.infinity,
                   height: 46,
@@ -1546,10 +1769,128 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     ),
                   ),
                 ),
+              ],
             ],
           ),
         );
       },
+    );
+  }
+
+  void _openTransferDepartmentModal(Map<String, dynamic> teacher) {
+    final uid = teacher['id'] as String? ?? '';
+    if (uid.isEmpty) return;
+
+    final currentDeptId = (teacher['departmentId'] as String? ?? '').trim();
+    final deptEntries = AppConstants.departmentIdToCanonicalName.entries.toList();
+    String selectedDeptId = deptEntries
+        .firstWhere(
+          (e) => e.key != currentDeptId,
+          orElse: () => deptEntries.first,
+        )
+        .key;
+    final reasonCtrl = TextEditingController();
+    bool isSubmitting = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => AlertDialog(
+          title: const Text('Transfer Faculty Department'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Transfer ${teacher['name']} to a verified department. Historical leave applications will retain their original department.',
+                style: const TextStyle(fontSize: 12.5, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: selectedDeptId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'New Department',
+                  border: OutlineInputBorder(),
+                ),
+                items: deptEntries
+                    .map(
+                      (e) => DropdownMenuItem(
+                        value: e.key,
+                        child: Text(
+                          e.value,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: isSubmitting
+                    ? null
+                    : (val) {
+                        if (val != null) {
+                          setModalState(() => selectedDeptId = val);
+                        }
+                      },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: reasonCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Official Transfer Reason',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isSubmitting ? null : () => Navigator.pop(ctx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: isSubmitting
+                  ? null
+                  : () async {
+                      if (selectedDeptId == currentDeptId) {
+                        AppHelpers.showError(
+                          context,
+                          'Please select a different target department.',
+                        );
+                        return;
+                      }
+                      setModalState(() => isSubmitting = true);
+                      try {
+                        final targetName =
+                            AppConstants.departmentIdToCanonicalName[selectedDeptId] ??
+                            selectedDeptId;
+                        await _userRepo.transferFacultyDepartment(
+                          targetUid: uid,
+                          newDepartmentId: selectedDeptId,
+                          newDepartmentName: targetName,
+                          reason: reasonCtrl.text.trim(),
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        if (mounted) {
+                          AppHelpers.showSuccess(
+                            context,
+                            '${teacher['name']} transferred to $targetName.',
+                          );
+                        }
+                      } catch (e) {
+                        setModalState(() => isSubmitting = false);
+                        if (mounted) {
+                          AppHelpers.showError(
+                            context,
+                            'Department transfer failed: $e',
+                          );
+                        }
+                      }
+                    },
+              child: const Text('Confirm Transfer'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -1596,6 +1937,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
             bottomNavigationBar: AppBottomNavigation(
               currentIndex: _currentNavIndex,
               role: 'admin',
+              adminApprovalBadgeCount: _pendingCount > 0 ? _pendingCount : null,
               onTap: _onBottomNavTap,
             ),
           ),
@@ -1644,27 +1986,100 @@ class _AdminDashboardState extends State<AdminDashboard> {
     }
   }
 
-  // ── Reusable Top Bar for Admin Dashboard Views (Avatar only, no bell, no breadcrumb) ────
-  Widget _buildTopBar({
+  // ── Unified Header Bar for Admin Dashboard Views (Title on Left, Pill + Avatar on Right) ────
+  Widget _buildHeader({
+    required String title,
+    Widget? pill,
     required bool isDark,
     required Color textPrimary,
     required Color textSecondary,
   }) {
     return Padding(
-      padding: const EdgeInsets.only(left: 20, right: 20, top: 10, bottom: 4),
+      padding: const EdgeInsets.only(left: 20, right: 20, top: 12, bottom: 6),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Admin Profile Avatar
-          GestureDetector(
-            onTap: () => Navigator.pushReplacementNamed(
-              context,
-              AppRoutes.adminProfile,
+          Expanded(
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  title,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: textPrimary,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+              ),
             ),
-            child: AppAvatar(
-              name: _adminName,
-              photoUrl: _adminPhotoUrl,
-              size: 38,
+          ),
+          const SizedBox(width: 8),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (pill != null) ...[
+                pill,
+                const SizedBox(width: 8),
+              ],
+              GestureDetector(
+                onTap: () => Navigator.pushReplacementNamed(
+                  context,
+                  AppRoutes.adminProfile,
+                ),
+                child: AppAvatar(
+                  name: _adminName,
+                  photoUrl: _adminPhotoUrl,
+                  size: 38,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSemesterPill(bool isDark) {
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 5,
+      ),
+      decoration: BoxDecoration(
+        color: isDark
+            ? const Color(0xFF1E3A8A).withValues(alpha: 0.35)
+            : const Color(0xFFEEF2FF),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark
+              ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
+              : const Color(0xFFE0E7FF),
+        ),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              color: Color(0xFF3B82F6),
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Fall Term 2026',
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              color: isDark ? const Color(0xFF93C5FD) : const Color(0xFF334155),
             ),
           ),
         ],
@@ -1687,96 +2102,36 @@ class _AdminDashboardState extends State<AdminDashboard> {
     if (!_sortNewestFirst) {
       activeList.sort(
         (a, b) =>
-            (b['submittedHours'] as int).compareTo(a['submittedHours'] as int),
+            (a['createdAtMs'] as int? ?? 0).compareTo(b['createdAtMs'] as int? ?? 0),
       );
     } else {
       activeList.sort(
         (a, b) =>
-            (a['submittedHours'] as int).compareTo(b['submittedHours'] as int),
+            (b['createdAtMs'] as int? ?? 0).compareTo(a['createdAtMs'] as int? ?? 0),
       );
     }
 
     return CustomScrollView(
       slivers: [
-        // ── 1. TOP BAR (Avatar only, no breadcrumb, no bell) ───────
+        // ── 1. UNIFIED HEADER (Title on Left, Pill + Avatar on Right) ───────
         SliverToBoxAdapter(
-          child: _buildTopBar(
+          child: _buildHeader(
+            title: 'Admin Dashboard',
+            pill: _buildSemesterPill(isDark),
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
           ),
         ),
 
-        // ── 2. ADMIN DASHBOARD HEADING & FALL TERM PILL ───────────
+        // ── 2. SUBTITLE & ACTION BUTTONS ───────────────────────────
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Admin Dashboard',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          fontFamily: 'serif',
-                          color: textPrimary,
-                          letterSpacing: -0.4,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    // Fall Term 2026 Pill
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF1E3A8A).withValues(alpha: 0.35)
-                            : const Color(0xFFEEF2FF),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isDark
-                              ? const Color(0xFF3B82F6).withValues(alpha: 0.3)
-                              : const Color(0xFFE0E7FF),
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF3B82F6),
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            'Fall Term 2026',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                              color: isDark
-                                  ? const Color(0xFF93C5FD)
-                                  : const Color(0xFF334155),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 2),
                 Text(
                   'Manage pending teacher registrations and verify credentials.',
                   style: TextStyle(
@@ -1819,8 +2174,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF1B4332),
-                      side: const BorderSide(color: Color(0xFF1B4332), width: 1.5),
+                      foregroundColor: isDark
+                          ? const Color(0xFF34D399)
+                          : const Color(0xFF1B4332),
+                      backgroundColor: isDark
+                          ? const Color(0xFF064E3B).withValues(alpha: 0.28)
+                          : Colors.transparent,
+                      side: BorderSide(
+                        color: isDark
+                            ? const Color(0xFF34D399)
+                            : const Color(0xFF1B4332),
+                        width: 1.5,
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
@@ -1972,7 +2337,61 @@ class _AdminDashboardState extends State<AdminDashboard> {
         ),
 
         // ── 5. PENDING VERIFICATIONS LIST ─────────────────────────
-        if (activeList.isEmpty)
+        if (_loadError != null && activeList.isEmpty)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 20),
+              child: Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFFFCA5A5)),
+                ),
+                child: Column(
+                  children: [
+                    const Icon(
+                      Icons.wifi_off_rounded,
+                      color: Color(0xFFDC2626),
+                      size: 28,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      _loadError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF991B1B),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: () {
+                        setState(() {
+                          _isLoading = true;
+                          _loadError = null;
+                        });
+                        _loadRealFaculty();
+                      },
+                      icon: const Icon(Icons.refresh_rounded, size: 16),
+                      label: const Text('Retry'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (_isLoading && activeList.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: CircularProgressIndicator(color: Color(0xFF1B4332)),
+              ),
+            ),
+          )
+        else if (activeList.isEmpty)
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
@@ -2111,9 +2530,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
         final name = (t['name'] as String).toLowerCase();
         final emp = (t['empId'] as String).toLowerCase();
         final dept = (t['department'] as String).toLowerCase();
+        final email = (t['email'] as String? ?? '').toLowerCase();
         if (!name.contains(_approvalSearchQuery) &&
             !emp.contains(_approvalSearchQuery) &&
-            !dept.contains(_approvalSearchQuery)) {
+            !dept.contains(_approvalSearchQuery) &&
+            !email.contains(_approvalSearchQuery)) {
           return false;
         }
       }
@@ -2122,62 +2543,44 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     return CustomScrollView(
       slivers: [
-        // 1. Top Bar (Avatar only, no breadcrumb, no bell)
+        // 1. UNIFIED HEADER (Title on Left, All Count Pill + Avatar on Right)
         SliverToBoxAdapter(
-          child: _buildTopBar(
+          child: _buildHeader(
+            title: 'Approvals Queue',
+            pill: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 5,
+              ),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF451A03).withValues(alpha: 0.5)
+                    : const Color(0xFFFEF3C7),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${_currentTeachers.length} All',
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFFB45309),
+                ),
+              ),
+            ),
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
           ),
         ),
 
-        // 2. Heading & Search
+        // 2. Subtitle & Search
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Approvals Queue',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          fontFamily: 'serif',
-                          color: textPrimary,
-                          letterSpacing: -0.4,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF451A03).withValues(alpha: 0.5)
-                            : const Color(0xFFFEF3C7),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '$_pendingCount Pending',
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFFB45309),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   'Review incoming teacher registrations and approve faculty accounts.',
                   style: TextStyle(fontSize: 12.5, color: textSecondary),
@@ -2373,13 +2776,33 @@ class _AdminDashboardState extends State<AdminDashboard> {
           deptCode != _facultyDeptFilter.toUpperCase()) {
         return false;
       }
+      final isActive = f['isActive'] != false;
+      final isOfficial = f['isOfficial'] == true;
+      switch (_facultyStatusFilter) {
+        case 'ACTIVE':
+          if (!isActive) return false;
+          break;
+        case 'INACTIVE':
+          if (isActive) return false;
+          break;
+        case 'REGISTERED':
+          if (isOfficial) return false;
+          break;
+        case 'OFFICIAL':
+          if (!isOfficial) return false;
+          break;
+      }
       if (_facultySearchQuery.isNotEmpty) {
         final name = (f['name'] as String).toLowerCase();
         final emp = (f['empId'] as String).toLowerCase();
         final dept = (f['department'] as String).toLowerCase();
+        final email = (f['email'] as String? ?? '').toLowerCase();
+        final designation = (f['designation'] as String? ?? '').toLowerCase();
         if (!name.contains(_facultySearchQuery) &&
             !emp.contains(_facultySearchQuery) &&
-            !dept.contains(_facultySearchQuery)) {
+            !dept.contains(_facultySearchQuery) &&
+            !email.contains(_facultySearchQuery) &&
+            !designation.contains(_facultySearchQuery)) {
           return false;
         }
       }
@@ -2388,62 +2811,44 @@ class _AdminDashboardState extends State<AdminDashboard> {
 
     return CustomScrollView(
       slivers: [
-        // 1. Top Bar (Avatar only, no breadcrumb, no bell)
+        // 1. UNIFIED HEADER (Title on Left, Verified Count Pill + Avatar on Right)
         SliverToBoxAdapter(
-          child: _buildTopBar(
+          child: _buildHeader(
+            title: 'Faculty Directory',
+            pill: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 5,
+              ),
+              decoration: BoxDecoration(
+                color: isDark
+                    ? const Color(0xFF064E3B).withValues(alpha: 0.5)
+                    : const Color(0xFFDCFCE7),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                '${_currentFacultyDirectory.length} Verified',
+                style: const TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w800,
+                  color: Color(0xFF16A34A),
+                ),
+              ),
+            ),
             isDark: isDark,
             textPrimary: textPrimary,
             textSecondary: textSecondary,
           ),
         ),
 
-        // 2. Heading & Search
+        // 2. Subtitle & Search
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Faculty Directory',
-                        style: TextStyle(
-                          fontSize: 24,
-                          fontWeight: FontWeight.w800,
-                          fontFamily: 'serif',
-                          color: textPrimary,
-                          letterSpacing: -0.4,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? const Color(0xFF064E3B).withValues(alpha: 0.5)
-                            : const Color(0xFFDCFCE7),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        '${_currentFacultyDirectory.length} Verified',
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF16A34A),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 2),
                 Text(
                   'Browse registered faculty members across university departments.',
                   style: TextStyle(fontSize: 12.5, color: textSecondary),
@@ -2467,7 +2872,8 @@ class _AdminDashboardState extends State<AdminDashboard> {
                     },
                     style: TextStyle(fontSize: 13.5, color: textPrimary),
                     decoration: InputDecoration(
-                      hintText: 'Search faculty by name, ID or department...',
+                      hintText:
+                          'Search faculty by name, ID, email or department...',
                       hintStyle: TextStyle(fontSize: 13, color: textSecondary),
                       prefixIcon: Icon(
                         Icons.search_rounded,
@@ -2500,44 +2906,86 @@ class _AdminDashboardState extends State<AdminDashboard> {
           ),
         ),
 
-        // 3. Department Filter Chips (Official Leading University Departments)
+        // 3. Department & Status Filter Chips
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.only(top: 14, bottom: 12),
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                children: [
-                  _buildDeptChip('ALL', 'All Departments', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('CSE', 'CSE', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('EEE', 'EEE', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('BBA', 'BBA', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('CE', 'Civil (CE)', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('ARCH', 'Architecture', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('LAW', 'Law', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('IS', 'Islamic Studies', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('MPH', 'Public Health', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('THM', 'THM', isDark),
-                  const SizedBox(width: 8),
-                  _buildDeptChip('ENG', 'English', isDark),
-                ],
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      _buildDeptChip('ALL', 'All Departments', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('CSE', 'CSE', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('EEE', 'EEE', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('BBA', 'BBA', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('CE', 'Civil (CE)', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('ARCH', 'Architecture', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('LAW', 'Law', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('IS', 'Islamic Studies', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('MPH', 'Public Health', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('THM', 'THM', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('ENG', 'English', isDark),
+                      const SizedBox(width: 8),
+                      _buildDeptChip('BNG', 'Bangla', isDark),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: Row(
+                    children: [
+                      _buildFacultyStatusChip('ALL', 'All Status', isDark),
+                      const SizedBox(width: 8),
+                      _buildFacultyStatusChip('ACTIVE', 'Active', isDark),
+                      const SizedBox(width: 8),
+                      _buildFacultyStatusChip('INACTIVE', 'Inactive', isDark),
+                      const SizedBox(width: 8),
+                      _buildFacultyStatusChip(
+                        'REGISTERED',
+                        'Registered Only',
+                        isDark,
+                      ),
+                      const SizedBox(width: 8),
+                      _buildFacultyStatusChip(
+                        'OFFICIAL',
+                        'Official Directory',
+                        isDark,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
         ),
 
         // 4. Faculty List
-        if (filtered.isEmpty)
+        if (_isLoading && filtered.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 48),
+              child: Center(
+                child: CircularProgressIndicator(color: Color(0xFF1B4332)),
+              ),
+            ),
+          )
+        else if (filtered.isEmpty)
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 48, horizontal: 20),
@@ -2590,11 +3038,38 @@ class _AdminDashboardState extends State<AdminDashboard> {
   }
 
   Widget _buildDeptChip(String deptKey, String label, bool isDark) {
-    final isSelected = _facultyDeptFilter == deptKey;
-    return GestureDetector(
+    return _buildFilterChip(
+      label: label,
+      isSelected: _facultyDeptFilter == deptKey,
+      isDark: isDark,
       onTap: () => setState(() => _facultyDeptFilter = deptKey),
+    );
+  }
+
+  Widget _buildFacultyStatusChip(String statusKey, String label, bool isDark) {
+    return _buildFilterChip(
+      label: label,
+      isSelected: _facultyStatusFilter == statusKey,
+      isDark: isDark,
+      onTap: () => setState(() => _facultyStatusFilter = statusKey),
+      compact: true,
+    );
+  }
+
+  Widget _buildFilterChip({
+    required String label,
+    required bool isSelected,
+    required bool isDark,
+    required VoidCallback onTap,
+    bool compact = false,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 12 : 14,
+          vertical: compact ? 6 : 8,
+        ),
         decoration: BoxDecoration(
           color: isSelected
               ? (isDark ? const Color(0xFF34D399) : const Color(0xFF0F3827))
@@ -2609,7 +3084,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
         child: Text(
           label,
           style: TextStyle(
-            fontSize: 12,
+            fontSize: compact ? 11.5 : 12,
             fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
             color: isSelected
                 ? (isDark ? const Color(0xFF0F172A) : Colors.white)
@@ -2660,23 +3135,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+                    Text(
+                      faculty['name'] as String,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        color: textPrimary,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Expanded(
-                          child: Text(
-                            faculty['name'] as String,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w800,
-                              color: textPrimary,
-                              letterSpacing: -0.2,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
                         if (faculty['isOfficial'] == true)
                           Container(
                             padding: const EdgeInsets.symmetric(
@@ -2748,7 +3221,6 @@ class _AdminDashboardState extends State<AdminDashboard> {
                               ],
                             ),
                           ),
-                          const SizedBox(width: 6),
                           InkWell(
                             key: Key('toggle_active_${faculty['id']}'),
                             onTap: () => _toggleUserActive(faculty),
@@ -2803,10 +3275,10 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         ],
                       ],
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 4),
                     Text(
                       '${faculty['empId']} • ${faculty['department']}',
-                      maxLines: 1,
+                      maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 11.5,
@@ -2814,8 +3286,11 @@ class _AdminDashboardState extends State<AdminDashboard> {
                         color: textSecondary,
                       ),
                     ),
-                    const SizedBox(height: 5),
-                    Row(
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         Container(
                           padding: const EdgeInsets.symmetric(
@@ -2837,18 +3312,21 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 color: Color(0xFF16A34A),
                               ),
                               const SizedBox(width: 4),
-                              Text(
-                                faculty['designation'] as String,
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF16A34A),
+                              Flexible(
+                                child: Text(
+                                  faculty['designation'] as String,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF16A34A),
+                                  ),
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        const SizedBox(width: 8),
                         Text(
                           'Joined ${faculty['joined']}',
                           style: TextStyle(fontSize: 11, color: textSecondary),
@@ -2915,29 +3393,39 @@ class _AdminDashboardState extends State<AdminDashboard> {
           if ((faculty['email'] as String? ?? '').isNotEmpty ||
               (faculty['phone'] as String? ?? '').isNotEmpty) ...[
             const SizedBox(height: 8),
-            Row(
+            Wrap(
+              spacing: 12,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                if ((faculty['email'] as String? ?? '').isNotEmpty) ...[
-                  Icon(Icons.email_outlined, size: 13, color: textSecondary),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      faculty['email'] as String,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11.5, color: textSecondary),
-                    ),
+                if ((faculty['email'] as String? ?? '').isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.email_outlined, size: 13, color: textSecondary),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          faculty['email'] as String,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 11.5, color: textSecondary),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-                if ((faculty['phone'] as String? ?? '').isNotEmpty) ...[
-                  const SizedBox(width: 10),
-                  Icon(Icons.phone_outlined, size: 13, color: textSecondary),
-                  const SizedBox(width: 4),
-                  Text(
-                    faculty['phone'] as String,
-                    style: TextStyle(fontSize: 11.5, color: textSecondary),
+                if ((faculty['phone'] as String? ?? '').isNotEmpty)
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.phone_outlined, size: 13, color: textSecondary),
+                      const SizedBox(width: 4),
+                      Text(
+                        faculty['phone'] as String,
+                        style: TextStyle(fontSize: 11.5, color: textSecondary),
+                      ),
+                    ],
                   ),
-                ],
               ],
             ),
           ],
@@ -3038,6 +3526,18 @@ class _AdminDashboardState extends State<AdminDashboard> {
     required Color textSecondary,
     required bool isDark,
   }) {
+    final status = (teacher['status'] as String? ?? 'PENDING').toUpperCase();
+    final isPending = status == 'PENDING';
+    final isApproved = status == 'APPROVED' || status == 'VERIFIED';
+    final badgeBg = isApproved
+        ? (isDark ? const Color(0xFF064E3B).withValues(alpha: 0.5) : const Color(0xFFDCFCE7))
+        : (isPending
+            ? (isDark ? const Color(0xFF451A03).withValues(alpha: 0.5) : const Color(0xFFFEF3C7))
+            : (isDark ? const Color(0xFF7F1D1D).withValues(alpha: 0.5) : const Color(0xFFFEE2E2)));
+    final badgeFg = isApproved
+        ? const Color(0xFF16A34A)
+        : (isPending ? const Color(0xFFB45309) : const Color(0xFFDC2626));
+
     return Container(
       margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(14),
@@ -3058,7 +3558,7 @@ class _AdminDashboardState extends State<AdminDashboard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // ── Top Row: Avatar (2-Letter Initials) + Info + PENDING Badge ───────
+          // ── Top Row: Avatar (2-Letter Initials) + Info + Status Badge ──────
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -3071,15 +3571,13 @@ class _AdminDashboardState extends State<AdminDashboard> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Name & PENDING badge on same line
+                    // Name & status badge on same line
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Expanded(
                           child: Text(
                             teacher['name'] as String,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.w800,
@@ -3089,25 +3587,23 @@ class _AdminDashboardState extends State<AdminDashboard> {
                           ),
                         ),
                         const SizedBox(width: 6),
-                        // PENDING Badge
+                        // Dynamic Status Badge
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
                             vertical: 2.5,
                           ),
                           decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF451A03).withValues(alpha: 0.5)
-                                : const Color(0xFFFEF3C7),
+                            color: badgeBg,
                             borderRadius: BorderRadius.circular(5),
                           ),
-                          child: const Text(
-                            'PENDING',
+                          child: Text(
+                            status,
                             style: TextStyle(
                               fontSize: 9.5,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 0.4,
-                              color: Color(0xFFB45309),
+                              color: badgeFg,
                             ),
                           ),
                         ),
@@ -3152,12 +3648,16 @@ class _AdminDashboardState extends State<AdminDashboard> {
                                 color: Color(0xFF16A34A),
                               ),
                               const SizedBox(width: 4),
-                              Text(
-                                teacher['designation'] as String,
-                                style: const TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: Color(0xFF16A34A),
+                              Flexible(
+                                child: Text(
+                                  teacher['designation'] as String,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF16A34A),
+                                  ),
                                 ),
                               ),
                             ],
@@ -3227,84 +3727,86 @@ class _AdminDashboardState extends State<AdminDashboard> {
             ),
           ),
 
-          const SizedBox(height: 12),
+          if (isPending) ...[
+            const SizedBox(height: 12),
 
-          // ── Action Buttons: [ ✕ Reject ]   [ ✓ Approve ] ───────────────────
-          Row(
-            children: [
-              // Reject Button (Soft Pink/Red)
-              Expanded(
-                child: SizedBox(
-                  height: 42,
-                  child: ElevatedButton(
-                    onPressed: () => _onRejectTeacher(teacher),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isDark
-                          ? const Color(0xFF450A0A)
-                          : const Color(0xFFFEE2E2),
-                      foregroundColor: const Color(0xFFDC2626),
-                      elevation: 0,
-                      side: BorderSide(
-                        color: isDark
-                            ? const Color(0xFF7F1D1D)
-                            : const Color(0xFFFECACA),
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.close_rounded, size: 16),
-                        SizedBox(width: 6),
-                        Text(
-                          'Reject',
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                          ),
+            // ── Action Buttons: [ ✕ Reject ]   [ ✓ Approve ] ────────────────
+            Row(
+              children: [
+                // Reject Button (Soft Pink/Red)
+                Expanded(
+                  child: SizedBox(
+                    height: 42,
+                    child: ElevatedButton(
+                      onPressed: () => _onRejectTeacher(teacher),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: isDark
+                            ? const Color(0xFF450A0A)
+                            : const Color(0xFFFEE2E2),
+                        foregroundColor: const Color(0xFFDC2626),
+                        elevation: 0,
+                        side: BorderSide(
+                          color: isDark
+                              ? const Color(0xFF7F1D1D)
+                              : const Color(0xFFFECACA),
                         ),
-                      ],
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.close_rounded, size: 16),
+                          SizedBox(width: 6),
+                          Text(
+                            'Reject',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 10),
+                const SizedBox(width: 10),
 
-              // Approve Button (Dark Forest Green)
-              Expanded(
-                child: SizedBox(
-                  height: 42,
-                  child: ElevatedButton(
-                    onPressed: () => _onApproveTeacher(teacher),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0F3827),
-                      foregroundColor: Colors.white,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.check_rounded, size: 17),
-                        SizedBox(width: 6),
-                        Text(
-                          'Approve',
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                          ),
+                // Approve Button (Dark Forest Green)
+                Expanded(
+                  child: SizedBox(
+                    height: 42,
+                    child: ElevatedButton(
+                      onPressed: () => _onApproveTeacher(teacher),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0F3827),
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
-                      ],
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.check_rounded, size: 17),
+                          SizedBox(width: 6),
+                          Text(
+                            'Approve',
+                            style: TextStyle(
+                              fontSize: 13.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );

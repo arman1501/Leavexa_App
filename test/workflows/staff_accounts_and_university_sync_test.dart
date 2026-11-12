@@ -49,19 +49,34 @@ void main() {
 
     test('Reserved staff emails are blocked from faculty registration', () {
       final reserved = [
-        'department.head.lu@gmail.com',
-        'DEPARTMENT.HEAD.LU@GMAIL.COM',
-        'registrar.lu@gmail.com',
-        'REGISTRAR.LU@GMAIL.COM',
         'admin.lu@gmail.com',
         'ADMIN.LU@GMAIL.COM',
+        'registrar.lu@gmail.com',
+        'REGISTRAR.LU@GMAIL.COM',
+        'department.head.lu@gmail.com',
+        'DEPARTMENT.HEAD.LU@GMAIL.COM',
+        'head.cse.lu@gmail.com',
+        'head.eee.lu@gmail.com',
+        'head.bba.lu@gmail.com',
+        'head.ce.lu@gmail.com',
+        'head.law.lu@gmail.com',
+        'head.arch.lu@gmail.com',
+        'head.ph.lu@gmail.com',
+        'head.thm.lu@gmail.com',
+        'head.islamic.lu@gmail.com',
+        'head.english.lu@gmail.com',
       ];
 
       for (final email in reserved) {
-        expect(AppConstants.isReservedStaffEmail(email), isTrue);
+        expect(AppConstants.isReservedStaffEmail(email), isTrue,
+            reason: 'Expected $email to be reserved');
         final validation = Validators.facultyEmail(email);
         expect(validation, equals('This email is reserved for administrative staff.'));
       }
+
+      // Verify all 10 canonical institutional department mappings exist
+      expect(AppConstants.departmentIdToCanonicalName.length, equals(10));
+      expect(AppConstants.getDepartmentId('Tourism & Hospitality Management'), equals('dept_thm'));
 
       // Normal faculty email is allowed
       expect(AppConstants.isReservedStaffEmail('faculty.member@gmail.com'), isFalse);

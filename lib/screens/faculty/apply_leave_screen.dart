@@ -2,15 +2,19 @@
 //  apply_leave_screen.dart  –  Apply for Leave Screen (Dark & Light Theme Aware)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:convert';
 import 'dart:io';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/utils/helpers.dart';
-import '../../models/faculty_profile_state.dart';
 import '../../models/leave_application_model.dart';
 import '../../repositories/auth_repository.dart';
 import '../../repositories/leave_repository.dart';
@@ -58,6 +62,8 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
   bool _isUploadingDocument = false;
   bool _isHalfDay = false;
   bool _isSubmitting = false;
+  bool _hasSavedDraft = false;
+  String? _allocatedApplicationId;
 
   final Map<String, Map<String, dynamic>> _leaveBalances = {
     'Casual': {'remaining': 6, 'name': 'Casual Leave (CL)'},
@@ -72,6 +78,57 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
   void initState() {
     super.initState();
     _loadRealBalances();
+    _loadDraft();
+  }
+
+  String _draftKeyForUid(String? uid) =>
+      'leavexa_leave_draft_${(uid != null && uid.trim().isNotEmpty) ? uid.trim() : 'anonymous'}';
+
+  String _ensureApplicationId() {
+    if (_allocatedApplicationId != null &&
+        _allocatedApplicationId!.trim().isNotEmpty) {
+      return _allocatedApplicationId!;
+    }
+    if (Firebase.apps.isNotEmpty) {
+      _allocatedApplicationId = FirebaseFirestore.instance
+          .collection(AppConstants.applicationsCollection)
+          .doc()
+          .id;
+    } else {
+      _allocatedApplicationId =
+          'app_${DateTime.now().microsecondsSinceEpoch}';
+    }
+    return _allocatedApplicationId!;
+  }
+
+  Future<void> _loadDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid = _authRepo.currentUserId;
+      final raw = prefs.getString(_draftKeyForUid(uid));
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      if (!mounted) return;
+      setState(() {
+        final lt = map['leaveType']?.toString();
+        if (lt != null && _leaveBalances.containsKey(lt)) {
+          _selectedLeaveType = lt;
+        }
+        final sd = DateTime.tryParse(map['startDate']?.toString() ?? '');
+        final ed = DateTime.tryParse(map['endDate']?.toString() ?? '');
+        if (sd != null) _startDate = sd;
+        if (ed != null && !ed.isBefore(_startDate)) _endDate = ed;
+        _isHalfDay = map['isHalfDay'] == true;
+        _reasonCtrl.text = map['reason']?.toString() ?? '';
+        _addressCtrl.text = map['address']?.toString() ?? '';
+        _emergencyPhoneCtrl.text = map['emergencyPhone']?.toString() ?? '';
+        _arrangementsCtrl.text = map['arrangements']?.toString() ?? '';
+        _hasSavedDraft = true;
+      });
+    } catch (_) {
+      // Ignore corrupt draft cache without crashing form
+    }
   }
 
   Future<void> _loadRealBalances() async {
@@ -201,8 +258,55 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
     });
   }
 
-  void _onSaveDraft() {
-    AppHelpers.showSuccess(context, 'Application saved as draft');
+  Future<void> _onSaveDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid = _authRepo.currentUserId;
+      final payload = jsonEncode({
+        'leaveType': _selectedLeaveType,
+        'startDate': _startDate.toIso8601String(),
+        'endDate': _endDate.toIso8601String(),
+        'isHalfDay': _isHalfDay,
+        'reason': _reasonCtrl.text.trim(),
+        'address': _addressCtrl.text.trim(),
+        'emergencyPhone': _emergencyPhoneCtrl.text.trim(),
+        'arrangements': _arrangementsCtrl.text.trim(),
+        'updatedAt': DateTime.now().toIso8601String(),
+      });
+      final saved = await prefs.setString(_draftKeyForUid(uid), payload);
+      if (!mounted) return;
+      if (!saved) {
+        AppHelpers.showError(context, 'Failed to save draft locally.');
+        return;
+      }
+      setState(() => _hasSavedDraft = true);
+      AppHelpers.showSuccess(context, 'Application saved as draft');
+    } catch (e) {
+      if (mounted) {
+        AppHelpers.showError(context, 'Failed to save draft: $e');
+      }
+    }
+  }
+
+  Future<void> _onDeleteDraft() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final uid = _authRepo.currentUserId;
+      await prefs.remove(_draftKeyForUid(uid));
+      if (!mounted) return;
+      setState(() {
+        _hasSavedDraft = false;
+        _reasonCtrl.clear();
+        _addressCtrl.clear();
+        _emergencyPhoneCtrl.clear();
+        _arrangementsCtrl.clear();
+      });
+      AppHelpers.showSuccess(context, 'Draft deleted');
+    } catch (e) {
+      if (mounted) {
+        AppHelpers.showError(context, 'Failed to delete draft: $e');
+      }
+    }
   }
 
   Future<void> _onSubmitApplication() async {
@@ -219,23 +323,41 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
 
     try {
       final user = await _authRepo.getCurrentUserProfile();
-      final applicantUid =
-          user?.uid ?? _authRepo.currentUserId ?? 'unknown_uid';
-      final applicantName =
-          user?.fullName ??
-          FacultyProfileState.instance.notifier.value.fullName;
-      final applicantEmpId =
-          user?.employeeId ??
-          FacultyProfileState.instance.notifier.value.employeeId;
-      final deptId =
-          user?.departmentId ??
-          FacultyProfileState.instance.notifier.value.department
-              .toLowerCase()
-              .replaceAll(RegExp(r'[^a-z0-9]+'), '_');
-      final deptName =
-          user?.departmentName ??
-          FacultyProfileState.instance.notifier.value.department;
+      if (user == null || user.uid.trim().isEmpty) {
+        if (mounted) {
+          AppHelpers.showError(
+            context,
+            'Session profile not found. Please sign in again.',
+          );
+        }
+        return;
+      }
+      if (!user.isActiveAndApproved) {
+        if (mounted) {
+          AppHelpers.showError(
+            context,
+            'Only active and approved faculty accounts can submit leave applications.',
+          );
+        }
+        return;
+      }
+      final deptId = user.departmentId.trim();
+      if (deptId.isEmpty) {
+        if (mounted) {
+          AppHelpers.showError(
+            context,
+            'Your account is missing an assigned department. Please contact Admin.',
+          );
+        }
+        return;
+      }
 
+      final applicantUid = user.uid;
+      final applicantName = user.fullName;
+      final applicantEmpId = user.employeeId;
+      final deptName = user.departmentName;
+
+      final applicationId = _ensureApplicationId();
       String? documentUrl;
       if (_pickedDocumentFile != null) {
         setState(() {
@@ -244,10 +366,9 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
         });
 
         try {
-          final tempAppId = 'app_${DateTime.now().millisecondsSinceEpoch}';
           final uploadRes = await _storageService.uploadLeaveDocument(
             uid: applicantUid,
-            applicationId: tempAppId,
+            applicationId: applicationId,
             file: _pickedDocumentFile!,
             onProgress: (p) {
               if (mounted) setState(() => _uploadProgress = p);
@@ -270,7 +391,7 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
       }
 
       final application = LeaveApplicationModel(
-        id: '',
+        id: applicationId,
         applicantUid: applicantUid,
         applicantName: applicantName,
         applicantEmployeeId: applicantEmpId,
@@ -288,6 +409,11 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
       );
 
       await _leaveRepo.applyLeave(application);
+      _allocatedApplicationId = null;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_draftKeyForUid(_authRepo.currentUserId));
+      } catch (_) {}
 
       if (!mounted) return;
       AppHelpers.showSuccess(
@@ -400,6 +526,18 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                             ],
                           ),
                         ),
+                        if (_hasSavedDraft) ...[
+                          IconButton(
+                            tooltip: 'Delete Draft',
+                            onPressed: _onDeleteDraft,
+                            icon: Icon(
+                              Icons.delete_outline_rounded,
+                              size: 20,
+                              color: Colors.red.shade400,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                        ],
                         GestureDetector(
                           onTap: _onSaveDraft,
                           child: Container(
@@ -411,7 +549,9 @@ class _ApplyLeaveScreenState extends State<ApplyLeaveScreen> {
                               border: Border.all(color: borderColor),
                             ),
                             child: Icon(
-                              Icons.bookmark_outline_rounded,
+                              _hasSavedDraft
+                                  ? Icons.bookmark_rounded
+                                  : Icons.bookmark_outline_rounded,
                               size: 20,
                               color: primaryColor,
                             ),

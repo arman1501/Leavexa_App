@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../models/registration_state.dart';
@@ -51,7 +53,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   late final Animation<double> _fade;
   late final Animation<Offset> _rise;
 
-  final List<String> _departments = [
+  List<String> _departments = [
     'Computer Science & Engineering',
     'Electrical & Electronic Engineering',
     'Business Administration',
@@ -59,7 +61,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     'Department of Law',
     'Department of Architecture',
     'Department of Public Health',
-    'Toursim & Hospitality Management',
+    'Tourism & Hospitality Management',
     'Department of Islamic Studies',
     'Department of English',
   ];
@@ -84,6 +86,38 @@ class _RegisterScreenState extends State<RegisterScreen>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic));
     _fadeCtrl.forward();
+    _loadDepartmentsFromCatalog();
+  }
+
+  Future<void> _loadDepartmentsFromCatalog() async {
+    try {
+      if (Firebase.apps.isEmpty) return;
+      final snap = await FirebaseFirestore.instance
+          .collection(AppConstants.departmentsCollection)
+          .get()
+          .timeout(const Duration(seconds: 5));
+      if (snap.docs.isEmpty || !mounted) return;
+
+      final loaded = <String>[];
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        if (data['isActive'] == false) continue;
+        final rawName = (data['name'] as String?)?.trim() ?? '';
+        if (rawName.isNotEmpty && AppConstants.isValidDepartment(rawName)) {
+          loaded.add(rawName);
+        }
+      }
+      if (loaded.isNotEmpty && mounted) {
+        setState(() {
+          _departments = loaded.toSet().toList();
+          if (_selectedDept != null && !_departments.contains(_selectedDept)) {
+            _selectedDept = null;
+          }
+        });
+      }
+    } catch (_) {
+      // Retain canonical fallback departments offline or in isolated widget tests
+    }
   }
 
   @override

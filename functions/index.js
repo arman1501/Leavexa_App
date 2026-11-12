@@ -9,6 +9,7 @@ const {
   setUserActiveHandler,
   syncUserCustomClaimsHandler,
   provisionFixedStaffAccountsHandler,
+  transferFacultyDepartmentHandler,
 } = require('./src/roles');
 
 const {
@@ -22,6 +23,7 @@ const {
 } = require('./src/approvals');
 
 const {
+  submitLeaveApplicationHandler,
   onLeaveApplicationUpdateHandler,
   onLeaveApplicationCreateHandler,
   processLeaveDeductionTransaction,
@@ -74,6 +76,21 @@ exports.syncUserCustomClaims = functions.https.onCall(async (data, context) => {
  */
 exports.provisionFixedStaffAccounts = functions.https.onCall(async (data, context) => {
   return await provisionFixedStaffAccountsHandler(data, context);
+});
+
+/**
+ * Transfers a Faculty member to another verified department (Admin-only).
+ * Historical leave applications keep their original departmentId snapshot.
+ */
+exports.transferFacultyDepartment = functions.https.onCall(async (data, context) => {
+  return await transferFacultyDepartmentHandler(data, context);
+});
+
+/**
+ * Trusted server-side leave submission verifying faculty status & department assignment.
+ */
+exports.submitLeaveApplication = functions.https.onCall(async (data, context) => {
+  return await submitLeaveApplicationHandler(data, context);
 });
 
 /**
@@ -157,6 +174,8 @@ exports.processNotificationRetries = functions.pubsub
 
 // ── Exported Core Handlers for Testing ───────────────────────────────────────
 exports._internal = {
+  submitLeaveApplicationHandler,
+  transferFacultyDepartmentHandler,
   processLeaveDeductionTransaction,
   sendPushNotificationToUser,
   sendPushNotificationToDepartmentHead,

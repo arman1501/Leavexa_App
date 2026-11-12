@@ -4,7 +4,7 @@
 
 const { HttpsError } = require('firebase-functions/v2/https');
 const { admin, db, auth, FieldValue } = require('./admin');
-const { assertIsAdmin } = require('./roles');
+const { assertIsAdmin, getInstitutionalSpec } = require('./roles');
 const { logAuditEvent } = require('./audit');
 const {
   sendPushNotificationToUser,
@@ -43,8 +43,8 @@ async function approveFacultyRegistrationHandler(data, context) {
 
   const userData = userSnap.data();
 
-  if (userData.role !== 'faculty') {
-    throw new HttpsError('failed-precondition', `User ${targetUid} has role '${userData.role}', expected 'faculty'.`);
+  if (userData.role !== 'faculty' || getInstitutionalSpec(userData.email)) {
+    throw new HttpsError('failed-precondition', `User ${targetUid} is not eligible for faculty approval.`);
   }
 
   const currentYear = new Date().getFullYear();

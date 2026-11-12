@@ -73,6 +73,16 @@ class LeaveRepository {
   Stream<List<LeaveApplicationModel>> streamDepartmentPending(String deptId) =>
       _leaveService.streamPendingForDepartment(deptId);
 
+  Future<List<LeaveApplicationModel>> departmentApplications(String deptId) =>
+      _leaveService.getApplicationsByDepartment(deptId);
+
+  Stream<List<LeaveApplicationModel>> streamDepartmentApplications(
+    String deptId,
+  ) => _leaveService.streamApplicationsByDepartment(deptId);
+
+  Future<List<LeaveApplicationModel>> registrarApplications() =>
+      _leaveService.getRegistrarApplications();
+
   Future<List<LeaveApplicationModel>> forwardedAll() =>
       _leaveService.getForwardedApplications();
 

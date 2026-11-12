@@ -37,6 +37,8 @@ abstract final class AuthErrorCode {
   static const String invalidDepartment = 'invalid-department';
   static const String incompleteRegistration = 'incomplete-registration';
   static const String invalidRole = 'invalid-role';
+  static const String unauthorizedInstitutionalAccount =
+      'unauthorized-institutional-account';
   static const String googleSignInCancelled = 'google-sign-in-cancelled';
   static const String googleSignInFailed = 'google-sign-in-failed';
   static const String googleNoAccount = 'google-no-account';

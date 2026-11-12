@@ -3,11 +3,13 @@
 //  Pixel-perfect implementation of Requests UI (Supports Pending & Reviewed views)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/theme/app_theme.dart';
+import '../../models/leave_application_model.dart';
 import '../../repositories/auth_repository.dart';
 import '../../repositories/leave_repository.dart';
 import '../../widgets/app_bottom_navigation.dart';
@@ -32,205 +34,124 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
   late final AuthRepository _authRepo =
       widget.authRepository ?? AuthRepository();
 
+  StreamSubscription<List<LeaveApplicationModel>>? _deptAppsSub;
   int _currentNavIndex = 1; // 1: Requests tab active
-  int _selectedFilterIndex =
-      1; // Default to Reviewed (12) to match reference screenshot
+  int _selectedFilterIndex = 0; // Default to Pending
   String _searchQuery = '';
   bool _isSearching = false;
   final _searchCtrl = TextEditingController();
   String _selectedSort = 'Latest First';
-  bool _hasFetchedReal = false;
+  bool _missingDeptAssignment = false;
+  String _deptId = '';
   List<Map<String, dynamic>> _realRequests = [];
 
   @override
   void initState() {
     super.initState();
-    _loadRealPendingRequests();
+    _loadRealRequests();
   }
 
-  Future<void> _loadRealPendingRequests() async {
+  Map<String, dynamic> _mapApplication(LeaveApplicationModel a) {
+    final startStr = DateFormat('dd MMM').format(a.startDate);
+    final endStr = DateFormat('dd MMM').format(a.endDate);
+    final fullDates =
+        '${DateFormat('dd MMM').format(a.startDate)} – ${DateFormat('dd MMM, yyyy').format(a.endDate)}';
+    final statusLabel = switch (a.status) {
+      'forwarded' => 'Approved',
+      'approved' => 'Approved',
+      'rejected' => 'Rejected',
+      'cancelled' => 'Cancelled',
+      _ => 'Pending',
+    };
+    final accent = switch (statusLabel) {
+      'Approved' => const Color(0xFF16A34A),
+      'Rejected' => const Color(0xFFDC2626),
+      _ => a.leaveTypeName.toLowerCase().contains('medical')
+          ? const Color(0xFFDC2626)
+          : const Color(0xFF16A34A),
+    };
+    return {
+      'id': a.id,
+      'applicantUid': a.applicantUid,
+      'departmentId': a.departmentId,
+      'facultyName': a.applicantName,
+      'facultyId': a.applicantEmployeeId,
+      'designation': 'Faculty Member • ${a.departmentName}',
+      'leaveType': a.leaveTypeName,
+      'accentColor': accent,
+      'dateRange': '$startStr – $endStr',
+      'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
+      'datesFull': fullDates,
+      'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
+      'documentUrl': a.documentUrl,
+      'teachingCovered': 'Arranged with Department',
+      'reviewedBy': a.headUid != null ? 'Department Head' : null,
+      'reviewedAt': a.headActionAt != null
+          ? DateFormat('dd MMM, hh:mm a').format(a.headActionAt!)
+          : null,
+      'reviewComment': a.headComment,
+      'rejectionReason': statusLabel == 'Rejected' ? a.headComment : null,
+      'reason': a.reason,
+      'attachmentName': a.documentUrl ?? 'Application_Doc.pdf',
+      'attachmentSize': 'Attached Document',
+      'submittedAt':
+          '${DateFormat('dd MMM, hh:mm a').format(a.appliedAt)} by ${a.applicantName}',
+      'appliedAtDt': a.appliedAt,
+      'status': statusLabel,
+      'model': a,
+    };
+  }
+
+  Future<void> _loadRealRequests() async {
     try {
       final user = await _authRepo.getCurrentUserProfile();
-      final deptId = user?.departmentId ?? 'dept_cse';
-      final apps = await _leaveRepo.departmentPending(deptId);
+      if (user == null || user.departmentId.trim().isEmpty) {
+        if (mounted) {
+          setState(() {
+            _missingDeptAssignment = true;
+            _realRequests = [];
+          });
+        }
+        return;
+      }
+
+      final deptId = user.departmentId.trim();
+      _deptId = deptId;
+
+      final allDept = await _leaveRepo.departmentApplications(deptId);
+      final listToMap = allDept.isNotEmpty
+          ? allDept
+          : await _leaveRepo.departmentPending(deptId);
+
       if (mounted) {
         setState(() {
-          _realRequests = apps.map((a) {
-            final startStr = DateFormat('dd MMM').format(a.startDate);
-            final endStr = DateFormat('dd MMM').format(a.endDate);
-            final fullDates =
-                '${DateFormat('dd MMM').format(a.startDate)} – ${DateFormat('dd MMM, yyyy').format(a.endDate)}';
-            return {
-              'id': a.id,
-              'applicantUid': a.applicantUid,
-              'facultyName': a.applicantName,
-              'facultyId': a.applicantEmployeeId,
-              'designation': 'Faculty Member • ${a.departmentName}',
-              'leaveType': a.leaveTypeName,
-              'accentColor': const Color(0xFF16A34A),
-              'dateRange': '$startStr – $endStr',
-              'duration': '${a.totalDays} Day${a.totalDays > 1 ? 's' : ''}',
-              'datesFull': fullDates,
-              'rxAttached': a.documentUrl != null && a.documentUrl!.isNotEmpty,
-              'teachingCovered': 'Arranged with Department',
-              'reviewedBy': a.headUid,
-              'reviewedAt': a.headActionAt != null
-                  ? DateFormat('dd MMM, hh:mm a').format(a.headActionAt!)
-                  : null,
-              'reason': a.reason,
-              'attachmentName': a.documentUrl ?? 'Application_Doc.pdf',
-              'attachmentSize': '1.0 MB',
-              'submittedAt':
-                  '${DateFormat('dd MMM, hh:mm a').format(a.appliedAt)} by ${a.applicantName}',
-              'status': 'Pending',
-              'model': a,
-            };
-          }).toList();
-          _hasFetchedReal = true;
+          _missingDeptAssignment = false;
+          _realRequests = listToMap
+              .where((a) => a.departmentId == deptId)
+              .map(_mapApplication)
+              .toList();
         });
       }
+
+      await _deptAppsSub?.cancel();
+      _deptAppsSub = _leaveRepo.streamDepartmentApplications(deptId).listen(
+        (apps) {
+          if (!mounted) return;
+          setState(() {
+            _realRequests = apps
+                .where((a) => a.departmentId == _deptId)
+                .map(_mapApplication)
+                .toList();
+          });
+        },
+        onError: (_) {},
+      );
     } catch (_) {}
   }
 
-  final List<Map<String, dynamic>> _allRequests = [
-    // ── REVIEWED REQUESTS ──────────────────────────────────────────────────
-    {
-      'id': 'REQ-802',
-      'facultyName': 'Mr. Tanvir Hasan',
-      'facultyId': 'CSE-1024',
-      'designation': 'Lecturer • Data Structures & Algorithms',
-      'leaveType': 'Medical Leave',
-      'accentColor': const Color(0xFF16A34A), // Green accent for Approved
-      'dateRange': '25 Sep – 26 Sep',
-      'duration': '2 Days',
-      'datesFull': '25 Sep – 26 Sep, 2026',
-      'rxAttached': true,
-      'teachingCovered': 'Ms. Sadia Karim (CS 201 Lab)',
-      'reviewedBy': 'Head of Department',
-      'reviewedAt': '24 Sep, 03:45 PM',
-      'reviewComment': 'Leave approved. Ensure class coverage as mentioned.',
-      'reason':
-          'Medical consultation & dental treatment (physician certificate uploaded).',
-      'attachmentName': 'Medical_Certificate.pdf',
-      'attachmentSize': '2.4 MB',
-      'submittedAt': '24 Sep, 10:20 AM',
-      'status': 'Approved',
-    },
-    {
-      'id': 'REQ-799',
-      'facultyName': 'Dr. Tariqul Islam',
-      'facultyId': 'CSE-1005',
-      'designation': 'Professor • Computer Systems',
-      'leaveType': 'Casual Leave',
-      'accentColor': const Color(
-        0xFFF59E0B,
-      ), // Orange/Amber accent for Changes Requested
-      'dateRange': '15 Sep – 16 Sep',
-      'duration': '2 Days',
-      'datesFull': '15 Sep – 16 Sep, 2026',
-      'rxAttached': false,
-      'teachingCovered': 'Engr. Naila Parveen',
-      'reviewedBy': 'Head of Department',
-      'reviewedAt': '24 Sep, 03:45 PM',
-      'reviewComment':
-          "Please update the doctor's certificate with the exact treatment date and re-submit.",
-      'reason': 'Personal work with student project evaluation review.',
-      'attachmentName': 'Clarification_Doc.pdf',
-      'attachmentSize': '1.2 MB',
-      'submittedAt': '14 Sep, 11:00 AM',
-      'status': 'Changes Requested',
-    },
-    {
-      'id': 'REQ-795',
-      'facultyName': 'Ms. Farhana Akter',
-      'facultyId': 'CSE-1033',
-      'designation': 'Lecturer • Software Engineering',
-      'leaveType': 'Earned Leave',
-      'accentColor': const Color(0xFFDC2626), // Red accent for Rejected
-      'dateRange': '10 Sep – 12 Sep',
-      'duration': '3 Days',
-      'datesFull': '10 Sep – 12 Sep, 2026',
-      'rxAttached': false,
-      'teachingCovered': null,
-      'reviewedBy': 'Head of Department',
-      'reviewedAt': '24 Sep, 03:45 PM',
-      'rejectionReason':
-          'The leave cannot be approved due to ongoing academic assessment during this period.',
-      'reason': 'Urgent relocation travel during scheduled mid-term exam week.',
-      'attachmentName': 'Travel_Notice.pdf',
-      'attachmentSize': '650 KB',
-      'submittedAt': '08 Sep, 03:45 PM',
-      'status': 'Rejected',
-    },
-
-    // ── PENDING REQUESTS ───────────────────────────────────────────────────
-    {
-      'id': 'REQ-805',
-      'facultyName': 'Mr. Tanvir Hasan',
-      'facultyId': 'CSE-1024',
-      'designation': 'Lecturer • Data Structures & Algorithms',
-      'leaveType': 'Medical Leave',
-      'accentColor': const Color(0xFFDC2626),
-      'dateRange': '25 Sep – 26 Sep',
-      'duration': '2 Days',
-      'datesFull': '25 Sep – 26 Sep, 2026',
-      'rxAttached': true,
-      'teachingCovered': 'Ms. Sadia Karim (CS 201 Lab)',
-      'reviewedBy': null,
-      'reviewedAt': null,
-      'reason':
-          'Medical consultation & dental treatment (physician certificate uploaded).',
-      'attachmentName': 'Medical_Certificate.pdf',
-      'attachmentSize': '2.4 MB',
-      'submittedAt': '24 Sep, 10:20 AM by Mr. Tanvir Hasan',
-      'status': 'Pending',
-    },
-    {
-      'id': 'REQ-803',
-      'facultyName': 'Dr. Farhana Yasmin',
-      'facultyId': 'CSE-1018',
-      'designation': 'Associate Professor • AI Lab',
-      'leaveType': 'Earned Leave',
-      'accentColor': const Color(0xFF334155),
-      'dateRange': '28 Sep – 02 Oct',
-      'duration': '5 Days',
-      'datesFull': '28 Sep – 02 Oct, 2026',
-      'rxAttached': false,
-      'teachingCovered': 'Dr. Anwar Hussain (AI 501)',
-      'reviewedBy': null,
-      'reviewedAt': null,
-      'reason':
-          'Family bereavement & urgent relocation matters for elder relatives.',
-      'attachmentName': 'Official_Note.pdf',
-      'attachmentSize': '1.1 MB',
-      'submittedAt': '25 Sep, 02:15 PM by Dr. Farhana Yasmin',
-      'status': 'Pending',
-    },
-    {
-      'id': 'REQ-801',
-      'facultyName': 'Dr. Sarah Ahmed',
-      'facultyId': 'CSE-1012',
-      'designation': 'Assistant Professor • Software Engineering',
-      'leaveType': 'Casual Leave',
-      'accentColor': const Color(0xFF16A34A),
-      'dateRange': '20 Sep – 22 Sep',
-      'duration': '3 Days',
-      'datesFull': '20 Sep – 22 Sep, 2026',
-      'rxAttached': false,
-      'teachingCovered': 'Prof. M. Kamal (SE 402, 3 Classes)',
-      'reviewedBy': null,
-      'reviewedAt': null,
-      'reason':
-          'Attending international symposium & curriculum harmonization workshop at National Center.',
-      'attachmentName': 'Workshop_Invitation.pdf',
-      'attachmentSize': '3.2 MB',
-      'submittedAt': '18 Sep, 09:30 AM by Dr. Sarah Ahmed',
-      'status': 'Pending',
-    },
-  ];
-
   @override
   void dispose() {
+    _deptAppsSub?.cancel();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -310,18 +231,10 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
     }
   }
 
-  List<Map<String, dynamic>> get _currentAllRequests {
-    if (_hasFetchedReal && _realRequests.isNotEmpty) {
-      return [
-        ..._realRequests,
-        ..._allRequests.where((r) => r['status'] != 'Pending'),
-      ];
-    }
-    return _allRequests;
-  }
+  List<Map<String, dynamic>> get _currentAllRequests => _realRequests;
 
   List<Map<String, dynamic>> get _filteredRequests {
-    return _currentAllRequests.where((item) {
+    final list = _currentAllRequests.where((item) {
       final isPending = item['status'] == 'Pending';
       final matchesFilter = _selectedFilterIndex == 0
           ? isPending
@@ -331,10 +244,20 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
       if (!matchesFilter) return false;
       if (_searchQuery.isEmpty) return true;
       final q = _searchQuery.toLowerCase();
-      final name = (item['facultyName'] as String).toLowerCase();
-      final type = (item['leaveType'] as String).toLowerCase();
-      return name.contains(q) || type.contains(q);
+      final name = (item['facultyName'] as String? ?? '').toLowerCase();
+      final type = (item['leaveType'] as String? ?? '').toLowerCase();
+      final empId = (item['facultyId'] as String? ?? '').toLowerCase();
+      return name.contains(q) || type.contains(q) || empId.contains(q);
     }).toList();
+
+    list.sort((a, b) {
+      final da = (a['appliedAtDt'] as DateTime?) ?? DateTime(1970);
+      final db = (b['appliedAtDt'] as DateTime?) ?? DateTime(1970);
+      return _selectedSort == 'Oldest First'
+          ? da.compareTo(db)
+          : db.compareTo(da);
+    });
+    return list;
   }
 
   @override
@@ -482,32 +405,58 @@ class _HeadRequestsScreenState extends State<HeadRequestsScreen> {
 
                   const SizedBox(height: 14),
 
-                  // ── 2. FILTER PILLS: Pending (6), Reviewed (12), All ──────
+                  if (_missingDeptAssignment)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 6),
+                      child: Text(
+                        'Department assignment missing on this Head account. Requests are restricted.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFFDC2626),
+                        ),
+                      ),
+                    ),
+
+                  // ── 2. FILTER PILLS: Pending, Reviewed, All ────────────────
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 20),
-                    child: Row(
-                      children: [
-                        _FilterChip(
-                          label: 'Pending (6)',
-                          isSelected: _selectedFilterIndex == 0,
-                          onTap: () => setState(() => _selectedFilterIndex = 0),
-                          isDark: isDark,
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: 'Reviewed (12)',
-                          isSelected: _selectedFilterIndex == 1,
-                          onTap: () => setState(() => _selectedFilterIndex = 1),
-                          isDark: isDark,
-                        ),
-                        const SizedBox(width: 8),
-                        _FilterChip(
-                          label: 'All',
-                          isSelected: _selectedFilterIndex == 2,
-                          onTap: () => setState(() => _selectedFilterIndex = 2),
-                          isDark: isDark,
-                        ),
-                      ],
+                    child: Builder(
+                      builder: (context) {
+                        final pendingCount = _currentAllRequests
+                            .where((r) => r['status'] == 'Pending')
+                            .length;
+                        final reviewedCount = _currentAllRequests
+                            .where((r) => r['status'] != 'Pending')
+                            .length;
+                        return Row(
+                          children: [
+                            _FilterChip(
+                              label: 'Pending ($pendingCount)',
+                              isSelected: _selectedFilterIndex == 0,
+                              onTap: () =>
+                                  setState(() => _selectedFilterIndex = 0),
+                              isDark: isDark,
+                            ),
+                            const SizedBox(width: 8),
+                            _FilterChip(
+                              label: 'Reviewed ($reviewedCount)',
+                              isSelected: _selectedFilterIndex == 1,
+                              onTap: () =>
+                                  setState(() => _selectedFilterIndex = 1),
+                              isDark: isDark,
+                            ),
+                            const SizedBox(width: 8),
+                            _FilterChip(
+                              label: 'All (${_currentAllRequests.length})',
+                              isSelected: _selectedFilterIndex == 2,
+                              onTap: () =>
+                                  setState(() => _selectedFilterIndex = 2),
+                              isDark: isDark,
+                            ),
+                          ],
+                        );
+                      },
                     ),
                   ),
 

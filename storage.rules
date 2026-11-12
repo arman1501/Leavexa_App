@@ -21,16 +21,45 @@ service firebase.storage {
       return request.auth.token.role;
     }
 
+    function isAuthorizedInstitutionalEmail(email, role, deptId) {
+      return (role == 'admin' && email == 'admin.lu@gmail.com') ||
+             (role == 'registrar' && email == 'registrar.lu@gmail.com') ||
+             (role == 'department_head' && (
+               (email == 'head.cse.lu@gmail.com' && deptId == 'dept_cse') ||
+               (email == 'head.eee.lu@gmail.com' && deptId == 'dept_eee') ||
+               (email == 'head.bba.lu@gmail.com' && deptId == 'dept_bba') ||
+               (email == 'head.ce.lu@gmail.com' && deptId == 'dept_civil') ||
+               (email == 'head.law.lu@gmail.com' && deptId == 'dept_law') ||
+               (email == 'head.arch.lu@gmail.com' && deptId == 'dept_arch') ||
+               (email == 'head.ph.lu@gmail.com' && deptId == 'dept_public_health') ||
+               (email == 'head.thm.lu@gmail.com' && deptId == 'dept_thm') ||
+               (email == 'head.islamic.lu@gmail.com' && deptId == 'dept_islamic_studies') ||
+               (email == 'head.english.lu@gmail.com' && deptId == 'dept_english')
+             ));
+    }
+
+    function hasValidTokenEmailForRole(role, deptId) {
+      return !request.auth.token.keys().hasAny(['email']) ||
+             (request.auth.token.email is string &&
+              isAuthorizedInstitutionalEmail(request.auth.token.email, role, deptId));
+    }
+
     function isAdmin() {
-      return isAuthenticated() && getRole() == 'admin';
+      return isAuthenticated() &&
+             getRole() == 'admin' &&
+             hasValidTokenEmailForRole('admin', 'admin_office');
     }
 
     function isRegistrar() {
-      return isAuthenticated() && (getRole() == 'registrar' || isAdmin());
+      return isAuthenticated() &&
+             ((getRole() == 'registrar' && hasValidTokenEmailForRole('registrar', 'registrar_office')) ||
+              isAdmin());
     }
 
     function isDeptHead() {
-      return isAuthenticated() && (getRole() == 'department_head' || isAdmin());
+      return isAuthenticated() &&
+             ((getRole() == 'department_head' && hasValidTokenEmailForRole('department_head', getUserDepartmentId())) ||
+              isAdmin());
     }
 
     function getUserDepartmentId() {
@@ -48,6 +77,10 @@ service firebase.storage {
     function isDeptHeadForApp(appId) {
       return isDeptHead() &&
              hasValidDepartmentClaim() &&
+             (!firestore.exists(/databases/(default)/documents/users/$(request.auth.uid)) ||
+              (firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.role == 'department_head' &&
+               firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.isActive == true &&
+               firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data.departmentId == getUserDepartmentId())) &&
              firestore.exists(/databases/(default)/documents/leave_applications/$(appId)) &&
              firestore.get(/databases/(default)/documents/leave_applications/$(appId)).data.departmentId == getUserDepartmentId();
     }

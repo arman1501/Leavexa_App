@@ -15,34 +15,75 @@ const {
 } = require('../src/university_sync');
 
 describe('Fixed Staff Account & University Website Integration Suite', () => {
-  describe('1. Fixed Staff Configuration & Role Constraints', () => {
-    it('1.1 Verifies all 3 designated accounts match the required roles and specifications', () => {
-      const { STAFF_ACCOUNTS } = require('../scripts/provision_fixed_staff');
-      assert.strictEqual(STAFF_ACCOUNTS.length, 3);
+  describe('1. Fixed 12 Institutional Accounts Configuration & Role Constraints', () => {
+    it('1.1 Verifies all 12 designated accounts (1 Admin, 1 Registrar, 10 Department Heads) and department mappings', () => {
+      const { INSTITUTIONAL_ACCOUNTS, DEPARTMENT_HEAD_DEFINITIONS } = require('../scripts/provision_fixed_staff');
+      assert.strictEqual(INSTITUTIONAL_ACCOUNTS.length, 12);
+      assert.strictEqual(DEPARTMENT_HEAD_DEFINITIONS.length, 10);
 
-      const head = STAFF_ACCOUNTS.find((a) => a.role === 'department_head');
-      assert.ok(head);
-      assert.strictEqual(head.email, 'department.head.lu@gmail.com');
-      assert.strictEqual(head.defaultPassword, 'LU_Head@63A');
-      assert.strictEqual(head.departmentId, 'dept_cse');
+      const adminAcc = INSTITUTIONAL_ACCOUNTS.find((a) => a.role === 'admin');
+      assert.ok(adminAcc);
+      assert.strictEqual(adminAcc.email, 'admin.lu@gmail.com');
+      assert.strictEqual(adminAcc.departmentId, 'admin_office');
 
-      const registrar = STAFF_ACCOUNTS.find((a) => a.role === 'registrar');
-      assert.ok(registrar);
-      assert.strictEqual(registrar.email, 'registrar.lu@gmail.com');
-      assert.strictEqual(registrar.defaultPassword, 'LU_Register@63A');
-      assert.strictEqual(registrar.departmentId, 'registrar_office');
+      const registrarAcc = INSTITUTIONAL_ACCOUNTS.find((a) => a.role === 'registrar');
+      assert.ok(registrarAcc);
+      assert.strictEqual(registrarAcc.email, 'registrar.lu@gmail.com');
+      assert.strictEqual(registrarAcc.departmentId, 'registrar_office');
 
-      const admin = STAFF_ACCOUNTS.find((a) => a.role === 'admin');
-      assert.ok(admin);
-      assert.strictEqual(admin.email, 'admin.lu@gmail.com');
-      assert.strictEqual(admin.defaultPassword, 'LU_Admin@63A');
-      assert.strictEqual(admin.departmentId, 'admin_office');
+      const expectedHeads = [
+        ['head.cse.lu@gmail.com', 'dept_cse'],
+        ['head.eee.lu@gmail.com', 'dept_eee'],
+        ['head.bba.lu@gmail.com', 'dept_bba'],
+        ['head.ce.lu@gmail.com', 'dept_civil'],
+        ['head.law.lu@gmail.com', 'dept_law'],
+        ['head.arch.lu@gmail.com', 'dept_arch'],
+        ['head.ph.lu@gmail.com', 'dept_public_health'],
+        ['head.thm.lu@gmail.com', 'dept_thm'],
+        ['head.islamic.lu@gmail.com', 'dept_islamic_studies'],
+        ['head.english.lu@gmail.com', 'dept_english'],
+      ];
+      for (const [email, deptId] of expectedHeads) {
+        const match = INSTITUTIONAL_ACCOUNTS.find((a) => a.email === email);
+        assert.ok(match, `Missing head config for ${email}`);
+        assert.strictEqual(match.role, 'department_head');
+        assert.strictEqual(match.departmentId, deptId);
+      }
     });
 
-    it('1.2 Passwords are NOT stored in Firestore document fields or logged to public channels', () => {
-      const { STAFF_ACCOUNTS } = require('../scripts/provision_fixed_staff');
-      for (const acc of STAFF_ACCOUNTS) {
+    it('1.2 No plaintext passwords are embedded in account definitions or Firestore payloads', () => {
+      const { INSTITUTIONAL_ACCOUNTS } = require('../scripts/provision_fixed_staff');
+      for (const acc of INSTITUTIONAL_ACCOUNTS) {
+        assert.strictEqual(acc.defaultPassword, undefined, 'Must never embed defaultPassword string');
+        assert.strictEqual(acc.password, undefined, 'Must never embed password string');
         assert.ok(!acc.passwordInFirestore, 'Password must never be part of firestore payload');
+        assert.ok(acc.passwordEnvVar && acc.passwordEnvVar.startsWith('STAFF_'));
+      }
+    });
+
+    it('1.3 Refuses to invent passwords for missing Auth accounts when secret is absent', async () => {
+      const { INSTITUTIONAL_ACCOUNTS, provisionAccount } = require('../scripts/provision_fixed_staff');
+      const prevEnv = process.env[INSTITUTIONAL_ACCOUNTS[2].passwordEnvVar];
+      delete process.env[INSTITUTIONAL_ACCOUNTS[2].passwordEnvVar];
+      try {
+        const fakeAuth = {
+          getUserByEmail: async () => {
+            const err = new Error('not found');
+            err.code = 'auth/user-not-found';
+            throw err;
+          },
+          createUser: async () => {
+            throw new Error('createUser must not be called without a supplied password');
+          },
+        };
+        const fakeDb = { collection: () => ({ doc: () => ({}) }) };
+        const res = await provisionAccount(INSTITUTIONAL_ACCOUNTS[2], { auth: fakeAuth, db: fakeDb });
+        assert.strictEqual(res.status, 'MISSING_INITIAL_PASSWORD');
+        assert.strictEqual(res.uid, null);
+      } finally {
+        if (prevEnv !== undefined) {
+          process.env[INSTITUTIONAL_ACCOUNTS[2].passwordEnvVar] = prevEnv;
+        }
       }
     });
   });

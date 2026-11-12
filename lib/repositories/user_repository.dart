@@ -173,6 +173,66 @@ class UserRepository {
     return users;
   }
 
+  /// Identifies genuine university accounts while filtering out automated
+  /// unit/emulator test stub documents.
+  static bool isGenuineUser(UserModel u) {
+    if (u.fullName.trim().isEmpty || u.employeeId.trim().isEmpty) {
+      return false;
+    }
+    final name = u.fullName.toLowerCase();
+    final emp = u.employeeId.toLowerCase();
+    final uid = u.uid.toLowerCase();
+    if (emp.contains('nophoto') ||
+        name.contains('valid faculty') ||
+        name.contains('mocha') ||
+        uid.startsWith('no_photo_user') ||
+        uid.startsWith('owner_') ||
+        uid.startsWith('user_a_') ||
+        uid.startsWith('user_b_') ||
+        uid.startsWith('restart_uid_') ||
+        uid.startsWith('valid_reg_') ||
+        uid.startsWith('recovery_user_') ||
+        uid.startsWith('uid_norm_') ||
+        uid.startsWith('uid_ws_')) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Fetch all active admin accounts.
+  Future<List<UserModel>> getActiveAdmins() async {
+    final data = await _service.queryCollection(
+      AppConstants.usersCollection,
+      isEqualTo: {'role': 'admin'},
+    );
+    return data
+        .map((m) => UserModel.fromMap(m))
+        .where((u) => u.isActive)
+        .toList();
+  }
+
+  /// Real-time stream of all users in Firestore (`users` collection).
+  Stream<List<UserModel>> streamAllUsers() {
+    return _service
+        .streamCollection(AppConstants.usersCollection)
+        .map((list) => list.map((m) => UserModel.fromMap(m)).toList());
+  }
+
+  /// Real-time stream of active admin accounts.
+  Stream<List<UserModel>> streamActiveAdmins() {
+    return _service
+        .streamCollection(
+          AppConstants.usersCollection,
+          isEqualTo: {'role': 'admin'},
+        )
+        .map(
+          (list) => list
+              .map((m) => UserModel.fromMap(m))
+              .where((u) => u.isActive)
+              .toList(),
+        );
+  }
+
   /// Stream of all faculty members (Admin directory).
   Stream<List<UserModel>> streamAllFaculty() {
     return _service
@@ -231,7 +291,7 @@ class UserRepository {
       await updateUser(uid, {
         'approvalStatus': 'rejected',
         'isActive': false,
-        if (reason != null) 'rejectionReason': reason,
+        'rejectionReason': ?reason,
       });
     }
   }
@@ -249,6 +309,33 @@ class UserRepository {
   /// Synchronize Firebase Auth Custom Claims with Firestore user profile.
   Future<Map<String, dynamic>> syncUserCustomClaims({String? uid}) async {
     return await _cloudFunctions.syncUserCustomClaims(targetUid: uid);
+  }
+
+  /// Officially transfer a Faculty member to a new verified department (Admin-only).
+  Future<Map<String, dynamic>> transferFacultyDepartment({
+    required String targetUid,
+    required String newDepartmentId,
+    String? newDepartmentName,
+    String? reason,
+  }) async {
+    if (_functions != null || _firestore == null) {
+      return await _cloudFunctions.transferFacultyDepartment(
+        targetUid: targetUid,
+        newDepartmentId: newDepartmentId,
+        newDepartmentName: newDepartmentName,
+        reason: reason,
+      );
+    } else {
+      await updateUser(targetUid, {
+        'departmentId': newDepartmentId,
+        if (newDepartmentName != null) 'departmentName': newDepartmentName,
+      });
+      return {
+        'success': true,
+        'targetUid': targetUid,
+        'newDepartmentId': newDepartmentId,
+      };
+    }
   }
 
   /// Create a staff account (Department Head or Registrar) via Cloud Functions.
